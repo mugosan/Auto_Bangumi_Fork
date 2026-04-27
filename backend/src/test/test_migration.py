@@ -206,6 +206,7 @@ class TestDatabaseMigration:
             conn.execute(text("""
                 CREATE TABLE bangumi (
                     id INTEGER PRIMARY KEY,
+                    tvdb_id INTEGER,
                     official_title TEXT NOT NULL DEFAULT 'official_title',
                     year TEXT,
                     title_raw TEXT NOT NULL DEFAULT 'title_raw',
@@ -267,11 +268,12 @@ class TestDatabaseMigration:
             """))
             conn.execute(text("""
                 INSERT INTO bangumi (
+                    tvdb_id,
                     official_title, year, title_raw, season, group_name,
                     dpi, source, subtitle, eps_collect, "offset",
                     filter, rss_link, poster_link, added, deleted
                 ) VALUES (
-                    '无职转生', '2021', 'Mushoku Tensei', 1, 'Lilith-Raws',
+                    1234,'无职转生', '2021', 'Mushoku Tensei', 1, 'Lilith-Raws',
                     '1080p', 'Baha', 'CHT', 0, 0,
                     '720,\\d+-\\d+', 'https://mikanani.me/RSS/Bangumi?bangumiId=2353',
                     'https://mikanani.me/images/Bangumi/202101/test.jpg', 1, 0
@@ -279,10 +281,10 @@ class TestDatabaseMigration:
             """))
             conn.execute(text("""
                 INSERT INTO bangumi (
-                    official_title, year, title_raw, season, group_name,
+                    tvdb_id, official_title, year, title_raw, season, group_name,
                     dpi, eps_collect, "offset", filter, rss_link, added, deleted
                 ) VALUES (
-                    '咒术回战', '2023', 'Jujutsu Kaisen', 2, 'ANi',
+                    45678,'咒术回战', '2023', 'Jujutsu Kaisen', 2, 'ANi',
                     '1080p', 0, 0, '720', 'https://mikanani.me/RSS/Bangumi?bangumiId=2888',
                     1, 0
                 )
