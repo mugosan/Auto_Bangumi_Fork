@@ -425,6 +425,7 @@ class TestDatabaseMigration:
         db.run_migrations()
 
         new_bangumi = Bangumi(
+            tvdb_id=424536,
             official_title="葬送的芙莉莲",
             year="2023",
             title_raw="Sousou no Frieren",
