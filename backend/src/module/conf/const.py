@@ -50,6 +50,11 @@ DEFAULT_SETTINGS = {
         "model": "gpt-3.5-turbo",
         "deployment_id": "",
     },
+    "tvdb": {
+        "enable": False,
+        "api_key": "",
+        "language": "jp",
+    },
     "security": {
         "login_whitelist": [],
         "login_tokens": [],

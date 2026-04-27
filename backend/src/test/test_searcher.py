@@ -33,17 +33,45 @@ class TestSearchUrl:
         assert "Tensei" in result.url
         assert result.parser == "mikan"
 
-    def test_nyaa_url(self):
-        """Nyaa search URL is constructed correctly."""
-        result = search_url("nyaa", ["Mushoku", "Tensei"])
+    def test_nyaa_url_tvdb_disabled(self):
+        """Nyaa falls back to tmdb parser when TVDB is disabled."""
+        from unittest.mock import MagicMock
+        settings = MagicMock()
+        settings.tvdb.enable = False
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("nyaa", ["Mushoku", "Tensei"])
         assert "nyaa.si" in result.url
         assert result.parser == "tmdb"
 
-    def test_dmhy_url(self):
-        """DMHY search URL is constructed correctly."""
-        result = search_url("dmhy", ["Mushoku", "Tensei"])
+    def test_nyaa_url_tvdb_enabled(self):
+        """Nyaa uses tvdb parser when TVDB is enabled."""
+        from unittest.mock import MagicMock
+        settings = MagicMock()
+        settings.tvdb.enable = True
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("nyaa", ["Mushoku", "Tensei"])
+        assert "nyaa.si" in result.url
+        assert result.parser == "tvdb"
+
+    def test_dmhy_url_tvdb_disabled(self):
+        """DMHY falls back to tmdb parser when TVDB is disabled."""
+        from unittest.mock import MagicMock
+        settings = MagicMock()
+        settings.tvdb.enable = False
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("dmhy", ["Mushoku", "Tensei"])
         assert "dmhy.org" in result.url
         assert result.parser == "tmdb"
+
+    def test_dmhy_url_tvdb_enabled(self):
+        """DMHY uses tvdb parser when TVDB is enabled."""
+        from unittest.mock import MagicMock
+        settings = MagicMock()
+        settings.tvdb.enable = True
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("dmhy", ["Mushoku", "Tensei"])
+        assert "dmhy.org" in result.url
+        assert result.parser == "tvdb"
 
     def test_unsupported_site_raises(self):
         """Unknown site raises ValueError."""
