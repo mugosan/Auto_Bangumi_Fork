@@ -36,11 +36,11 @@ class TitleParser:
         if tmdb_info:
             logger.debug("TMDB Matched, official title is %s", tmdb_info.title)
             tmdb_season = tmdb_info.last_season if tmdb_info.last_season else season
-            return tmdb_info.title, tmdb_season, tmdb_info.year, tmdb_info.poster_link
+            return tmdb_info.id, tmdb_info.title, tmdb_season, tmdb_info.year, tmdb_info.poster_link
         else:
             logger.warning(f"Cannot match {title} in TMDB. Use raw title instead.")
             logger.warning("Please change bangumi info manually.")
-            return title, season, None, None
+            return None, title, season, None, None
 
     @staticmethod
     async def tmdb_poster_parser(bangumi: Bangumi):

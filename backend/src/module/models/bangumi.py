@@ -7,6 +7,7 @@ from sqlmodel import Field, SQLModel
 
 class Bangumi(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
+    tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
     official_title: str = Field(
         default="official_title", alias="official_title", title="番剧中文名"
     )

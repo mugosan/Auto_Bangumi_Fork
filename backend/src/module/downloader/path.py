@@ -66,8 +66,10 @@ class TorrentPath:
         so files are saved directly to the correct season folder.
         """
         folder = (
-            f"{data.official_title} ({data.year})" if data.year else data.official_title
+            f"{data.official_title} ({data.year}) [tvdb-{data.tvdb_id}]" if data.year
+            else f"{data.official_title} [tvdb-{data.tvdb_id}]"
         )
+        logger.info(f"[Path] Generating save path for bangumi: {folder}")
         # Apply season_offset to get the adjusted season number for the folder
         adjusted_season = data.season + getattr(data, "season_offset", 0)
         if adjusted_season < 1:
