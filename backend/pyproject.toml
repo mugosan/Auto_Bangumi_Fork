@@ -43,6 +43,7 @@ pythonpath = ["src"]
 asyncio_mode = "auto"
 markers = [
     "e2e: End-to-end integration tests (require Docker)",
+    "integration: Live integration tests that call external APIs (require credentials)",
 ]
 
 [tool.ruff]

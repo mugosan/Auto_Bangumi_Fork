@@ -61,6 +61,52 @@ class TestGenSavePath:
         assert "Test (2025)" in result
         assert "Season 3" in result
 
+    def test_folder_includes_tvdb_id(self):
+        """Folder name contains [tmdb-<id>] when tvdb_id is set."""
+        bangumi = make_bangumi(official_title="My Anime", year="2024", season=1, tvdb_id=267440)
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = TorrentPath._gen_save_path(bangumi)
+
+        assert "My Anime (2024) [tmdb-267440]" in result
+
+    def test_folder_tvdb_id_none(self):
+        """Folder name contains [tmdb-None] when tvdb_id is not set."""
+        bangumi = make_bangumi(official_title="My Anime", year="2024", season=1, tvdb_id=None)
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = TorrentPath._gen_save_path(bangumi)
+
+        assert "My Anime (2024) [tmdb-None]" in result
+
+    def test_folder_without_year_includes_tvdb_id(self):
+        """Folder name omits year but still includes [tmdb-<id>] when year is None."""
+        bangumi = make_bangumi(official_title="My Anime", year=None, season=1, tvdb_id=12345)
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = TorrentPath._gen_save_path(bangumi)
+
+        assert "My Anime [tmdb-12345]" in result
+        assert "(None)" not in result
+
+    def test_season_offset_applied(self):
+        """Adjusted season = season + season_offset is used in the folder name."""
+        bangumi = make_bangumi(official_title="My Anime", year="2024", season=1, season_offset=1)
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = TorrentPath._gen_save_path(bangumi)
+
+        assert "Season 2" in result
+
+    def test_negative_season_offset_clamped(self):
+        """A season_offset that would make season < 1 falls back to the original season."""
+        bangumi = make_bangumi(official_title="My Anime", year="2024", season=1,season_offset=-5)
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = TorrentPath._gen_save_path(bangumi)
+
+        assert "Season 1" in result
+
 
 # ---------------------------------------------------------------------------
 # _rule_name
