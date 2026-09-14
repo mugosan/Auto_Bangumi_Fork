@@ -781,6 +781,30 @@ MIGRATIONS: tuple[Migration, ...] = (
             ),
         ),
     ),
+    # v25/v26: fork-specific TVDB support (mugosan/Auto_Bangumi_Fork). Already
+    # applied and no-op for any database that ran the fork's own pre-merge
+    # v10/v11 (see _repair_fork_schema_drift above); runs for real for a
+    # database coming straight from unmodified upstream. Guards also treat a
+    # missing bangumi table as "nothing to do yet" rather than "must run now"
+    # -- some migration-range tests build isolated fixtures (e.g. auth-only)
+    # without a bangumi table at all, and in real startup create_tables()
+    # always creates bangumi (with these columns already, once added to the
+    # model) before any migration runs.
+    Migration(
+        25,
+        "add tvdb_id column to bangumi for TheTVDB metadata lookup",
+        ("ALTER TABLE bangumi ADD COLUMN tvdb_id INTEGER DEFAULT NULL",),
+        lambda inspector: not table_exists("bangumi")(inspector)
+        or column_exists("bangumi", "tvdb_id")(inspector),
+    ),
+    Migration(
+        26,
+        "add id_source column to bangumi to record whether tvdb_id came from "
+        "TVDB or the TMDB fallback",
+        ("ALTER TABLE bangumi ADD COLUMN id_source TEXT DEFAULT NULL",),
+        lambda inspector: not table_exists("bangumi")(inspector)
+        or column_exists("bangumi", "id_source")(inspector),
+    ),
 )
 
 # 由迁移列表派生，新增迁移时无需手动同步
@@ -816,6 +840,42 @@ def set_schema_version(conn: Connection, version: int) -> None:
     )
 
 
+def _repair_fork_schema_drift(conn: Connection) -> None:
+    """一次性修复：mugosan/Auto_Bangumi_Fork 在合并本上游历史前，自行把
+    schema_version 10/11 用于完全不同的迁移（tvdb_id 回填 / id_source 列），
+    与上游真正的 v10（preferred_group/preferred_resolution）、v11
+    （aria2_gid 表）撞号。
+
+    受影响的数据库会卡在 schema_version=11，导致 ``run_migrations_conn``
+    的版本号跳过逻辑（``if migration.version <= current: continue``）
+    永久跳过真正的 v10/v11 —— 不仅两者本身的列/表缺失，v15
+    （`ALTER TABLE aria2_gid ADD COLUMN renamed_paths`）等后续迁移
+    也会因为依赖 v11 建的表而直接报错、启动中止。
+
+    "tvdb_id 存在但 preferred_group 不存在" 是仅这批数据库才会出现的
+    指纹（真正跑过上游 v10 的库一定同时具备两者）。命中时把记录的版本号
+    回退到 9 —— 两条历史谱系在此完全一致的最后一个版本——让主循环
+    按正确顺序、通过每条迁移自身的 already_applied 守卫重新推导 v10
+    及以后的状态。回退只影响 schema_version 记账，不改动任何已有数据；
+    每条迁移仍然是幂等的存在性检查，重新走一遍没有副作用。
+    """
+    inspector = inspect(conn)
+    if "bangumi" not in inspector.get_table_names():
+        return
+    columns = {col["name"] for col in inspector.get_columns("bangumi")}
+    if "tvdb_id" in columns and "preferred_group" not in columns:
+        current = get_schema_version(conn)
+        if current > 9:
+            logger.warning(
+                "Detected fork-specific schema drift (bangumi.tvdb_id present, "
+                "bangumi.preferred_group absent) at schema_version=%s -- "
+                "rolling back recorded schema version to 9 so upstream "
+                "migrations v10+ re-apply in order",
+                current,
+            )
+            set_schema_version(conn, 9)
+
+
 def run_migrations_conn(conn: Connection) -> None:
     """在单个连接上执行所有待应用迁移。
 
@@ -824,6 +884,7 @@ def run_migrations_conn(conn: Connection) -> None:
     提供服务。
     """
     ensure_schema_version_table(conn)
+    _repair_fork_schema_drift(conn)
     current = get_schema_version(conn)
     if current >= CURRENT_SCHEMA_VERSION:
         return

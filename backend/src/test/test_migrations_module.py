@@ -833,3 +833,140 @@ class TestRunMigrations:
         inspector = inspect(engine)
         rssitem_cols = {c["name"] for c in inspector.get_columns("rssitem")}
         assert "connection_status" not in rssitem_cols
+
+
+class TestForkSchemaDrift:
+    """mugosan/Auto_Bangumi_Fork shipped its own v10/v11 (tvdb_id backfill,
+    id_source column) before this migration history existed, colliding with
+    upstream's real v10 (preferred_group/preferred_resolution) and v11
+    (aria2_gid table). A database that ran the fork's numbering is stuck at
+    schema_version=11 with tvdb_id/id_source present but none of upstream's
+    real v10/v11 changes -- and critically, v15 unconditionally ALTERs
+    aria2_gid, which doesn't exist, so without repair this would hard-abort
+    startup rather than just leave a couple of columns missing.
+    """
+
+    def _make_fork_v11_engine(self) -> Engine:
+        """A database that ran the fork's pre-merge migrations: real v1-v9
+        applied, plus the fork's own tvdb_id/id_source columns, recorded as
+        schema_version=11 -- but none of upstream's real v10/v11 changes.
+        """
+        return _make_versioned_engine(
+            11,
+            bangumi_extra=(
+                "episode_offset INTEGER DEFAULT 0,"
+                " season_offset INTEGER DEFAULT 0,"
+                " needs_review INTEGER DEFAULT 0,"
+                " needs_review_reason TEXT DEFAULT NULL,"
+                " suggested_season_offset INTEGER DEFAULT NULL,"
+                " suggested_episode_offset INTEGER DEFAULT NULL,"
+                " title_aliases TEXT DEFAULT NULL,"
+                " weekday_locked BOOLEAN DEFAULT 0,"
+                " tvdb_id INTEGER DEFAULT NULL,"
+                " id_source TEXT DEFAULT NULL"
+            ),
+            torrent_extra="qb_hash TEXT",
+        )
+
+    def test_repair_reaches_current_version_without_error(self):
+        engine = self._make_fork_v11_engine()
+
+        run_migrations(engine)  # must not raise (v15 depends on v11's table)
+
+        with engine.connect() as conn:
+            assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+    def test_repair_backfills_real_upstream_v10_v11(self):
+        engine = self._make_fork_v11_engine()
+
+        run_migrations(engine)
+
+        bangumi_cols = _columns(engine, "bangumi")
+        assert "preferred_group" in bangumi_cols
+        assert "preferred_resolution" in bangumi_cols
+        assert "aria2_gid" in inspect(engine).get_table_names()
+
+    def test_repair_preserves_fork_columns_and_their_data(self):
+        engine = self._make_fork_v11_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO bangumi (id, official_title, tvdb_id, id_source) "
+                    "VALUES (1, 'Test Show', 267440, 'tvdb')"
+                )
+            )
+
+        run_migrations(engine)
+
+        bangumi_cols = _columns(engine, "bangumi")
+        assert "tvdb_id" in bangumi_cols
+        assert "id_source" in bangumi_cols
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT tvdb_id, id_source FROM bangumi WHERE id = 1")
+            ).fetchone()
+        assert row == (267440, "tvdb")
+
+    def test_genuine_upstream_v11_is_not_touched(self):
+        """A real upstream database that legitimately reached v11 (has
+        preferred_group/preferred_resolution from the real v10 AND the
+        aria2_gid table from the real v11) must not be mistaken for fork
+        drift -- no version rollback, no redundant re-migration.
+        """
+        engine = _make_versioned_engine(
+            11,
+            bangumi_extra=(
+                "episode_offset INTEGER DEFAULT 0,"
+                " season_offset INTEGER DEFAULT 0,"
+                " needs_review INTEGER DEFAULT 0,"
+                " needs_review_reason TEXT DEFAULT NULL,"
+                " suggested_season_offset INTEGER DEFAULT NULL,"
+                " suggested_episode_offset INTEGER DEFAULT NULL,"
+                " title_aliases TEXT DEFAULT NULL,"
+                " weekday_locked BOOLEAN DEFAULT 0,"
+                " preferred_group TEXT DEFAULT NULL,"
+                " preferred_resolution TEXT DEFAULT NULL"
+            ),
+            torrent_extra="qb_hash TEXT",
+        )
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE aria2_gid ("
+                    "  gid VARCHAR NOT NULL PRIMARY KEY,"
+                    "  bangumi_id INTEGER REFERENCES bangumi(id),"
+                    "  category VARCHAR,"
+                    "  dedup_key VARCHAR,"
+                    "  created_at TIMESTAMP NOT NULL"
+                    ")"
+                )
+            )
+
+        run_migrations(engine)
+
+        with engine.connect() as conn:
+            assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        bangumi_cols = _columns(engine, "bangumi")
+        assert "tvdb_id" in bangumi_cols  # v25 still adds it fresh
+        assert "id_source" in bangumi_cols
+
+    def test_fresh_database_is_not_touched(self):
+        """A brand-new install (metadata.create_all, no fork history at all)
+        must reach CURRENT_SCHEMA_VERSION normally -- the drift guard must
+        not misfire just because bangumi.tvdb_id exists on a fresh schema.
+        """
+        engine = create_engine("sqlite://")
+        SQLModel.metadata.create_all(engine)
+
+        run_migrations(engine)
+
+        with engine.connect() as conn:
+            assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+    def test_repair_guard_tolerates_missing_bangumi_table(self):
+        """The drift check itself must not explode if bangumi doesn't exist
+        yet (e.g. mid-way through a from-scratch create_tables call)."""
+        engine = create_engine("sqlite://")
+        with engine.begin() as conn:
+            ensure_schema_version_table(conn)
+            migration_module._repair_fork_schema_drift(conn)  # must not raise
