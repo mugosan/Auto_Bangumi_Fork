@@ -98,7 +98,9 @@ class NotificationProvider(BaseModel):
 
     # Common fields (with env var expansion)
     token_: Optional[str] = Field(None, alias="token", description="Auth token")
-    chat_id_: Optional[str] = Field(None, alias="chat_id", description="Chat/channel ID")
+    chat_id_: Optional[str] = Field(
+        None, alias="chat_id", description="Chat/channel ID"
+    )
 
     # Provider-specific fields
     webhook_url_: Optional[str] = Field(
@@ -219,6 +221,14 @@ class ExperimentalOpenAI(BaseModel):
         return value
 
 
+class TVDBConfig(BaseModel):
+    """TVDB v4 API configuration for metadata lookup."""
+
+    enable: bool = Field(False, description="Enable TVDB lookup")
+    api_key: str = Field("", description="TVDB v4 API key (register at thetvdb.com)")
+    language: str = Field("jp", description="Preferred language code (jp/zh/en)")
+
+
 class Security(BaseModel):
     """Access control configuration for the login endpoint and MCP server.
 
@@ -256,6 +266,7 @@ class Config(BaseModel):
     proxy: Proxy = Proxy()
     notification: Notification = Notification()
     experimental_openai: ExperimentalOpenAI = ExperimentalOpenAI()
+    tvdb: TVDBConfig = TVDBConfig()
     security: Security = Security()
 
     def model_dump(self, *args, by_alias=True, **kwargs):

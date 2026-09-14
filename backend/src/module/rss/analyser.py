@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class RSSAnalyser(TitleParser):
-    async def official_title_parser(self, bangumi: Bangumi, rss: RSSItem, torrent: Torrent):
+    async def official_title_parser(
+        self, bangumi: Bangumi, rss: RSSItem, torrent: Torrent
+    ):
         if rss.parser == "mikan":
             try:
                 bangumi.poster_link, bangumi.official_title = await self.mikan_parser(
@@ -21,12 +23,30 @@ class RSSAnalyser(TitleParser):
             except AttributeError:
                 logger.warning("[Parser] Mikan torrent has no homepage info.")
                 pass
-        elif rss.parser == "tmdb":
-            tvdb_id, tmdb_title, season, year, poster_link = await self.tmdb_parser(
-               bangumi.official_title, bangumi.season, settings.rss_parser.language
+        elif rss.parser == "tvdb":
+            meta_id, title, season, year, poster_link = await self.tvdb_parser(
+                bangumi.official_title, bangumi.season, settings.rss_parser.language
             )
-            bangumi.tvdb_id = tvdb_id
-            bangumi.official_title = tmdb_title
+            if meta_id is None:
+                logger.info("[Parser] TVDB lookup failed, falling back to TMDB")
+                meta_id, title, season, year, poster_link = await self.tmdb_parser(
+                    bangumi.official_title, bangumi.season, settings.rss_parser.language
+                )
+                bangumi.id_source = "tmdb"
+            else:
+                bangumi.id_source = "tvdb"
+            bangumi.tvdb_id = meta_id
+            bangumi.official_title = title
+            bangumi.year = year
+            bangumi.season = season
+            bangumi.poster_link = poster_link
+        elif rss.parser == "tmdb":
+            meta_id, title, season, year, poster_link = await self.tmdb_parser(
+                bangumi.official_title, bangumi.season, settings.rss_parser.language
+            )
+            bangumi.tvdb_id = meta_id
+            bangumi.id_source = "tmdb"
+            bangumi.official_title = title
             bangumi.year = year
             bangumi.season = season
             bangumi.poster_link = poster_link
@@ -52,7 +72,9 @@ class RSSAnalyser(TitleParser):
         for torrent in torrents:
             bangumi = self.raw_parser(raw=torrent.name)
             if bangumi and bangumi.title_raw not in seen_titles:
-                await self.official_title_parser(bangumi=bangumi, rss=rss, torrent=torrent)
+                await self.official_title_parser(
+                    bangumi=bangumi, rss=rss, torrent=torrent
+                )
                 if not full_parse:
                     return [bangumi]
                 seen_titles.add(bangumi.title_raw)

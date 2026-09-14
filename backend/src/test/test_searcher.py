@@ -1,11 +1,11 @@
 """Tests for search providers: URL construction, keyword handling."""
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from module.models import Bangumi, RSSItem
 from module.searcher.provider import search_url
-
 
 # ---------------------------------------------------------------------------
 # search_url
@@ -33,17 +33,49 @@ class TestSearchUrl:
         assert "Tensei" in result.url
         assert result.parser == "mikan"
 
-    def test_nyaa_url(self):
-        """Nyaa search URL is constructed correctly."""
-        result = search_url("nyaa", ["Mushoku", "Tensei"])
+    def test_nyaa_url_tvdb_disabled(self):
+        """Nyaa falls back to tmdb parser when TVDB is disabled."""
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.tvdb.enable = False
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("nyaa", ["Mushoku", "Tensei"])
         assert "nyaa.si" in result.url
         assert result.parser == "tmdb"
 
-    def test_dmhy_url(self):
-        """DMHY search URL is constructed correctly."""
-        result = search_url("dmhy", ["Mushoku", "Tensei"])
+    def test_nyaa_url_tvdb_enabled(self):
+        """Nyaa uses tvdb parser when TVDB is enabled."""
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.tvdb.enable = True
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("nyaa", ["Mushoku", "Tensei"])
+        assert "nyaa.si" in result.url
+        assert result.parser == "tvdb"
+
+    def test_dmhy_url_tvdb_disabled(self):
+        """DMHY falls back to tmdb parser when TVDB is disabled."""
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.tvdb.enable = False
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("dmhy", ["Mushoku", "Tensei"])
         assert "dmhy.org" in result.url
         assert result.parser == "tmdb"
+
+    def test_dmhy_url_tvdb_enabled(self):
+        """DMHY uses tvdb parser when TVDB is enabled."""
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.tvdb.enable = True
+        with patch("module.searcher.provider.settings", settings):
+            result = search_url("dmhy", ["Mushoku", "Tensei"])
+        assert "dmhy.org" in result.url
+        assert result.parser == "tvdb"
 
     def test_unsupported_site_raises(self):
         """Unknown site raises ValueError."""
@@ -80,7 +112,7 @@ class TestSearchUrl:
 class TestSpecialUrl:
     def test_uses_bangumi_fields(self):
         """special_url builds keywords from SEARCH_KEY fields of Bangumi."""
-        from module.searcher.searcher import SearchTorrent, SEARCH_KEY
+        from module.searcher.searcher import SEARCH_KEY, SearchTorrent
         from test.factories import make_bangumi
 
         bangumi = make_bangumi(
@@ -92,9 +124,12 @@ class TestSpecialUrl:
             subtitle="CHT",
         )
 
-        with patch("module.searcher.provider.SEARCH_CONFIG", {
-            "mikan": "https://mikanani.me/RSS/Search?searchstr=%s",
-        }):
+        with patch(
+            "module.searcher.provider.SEARCH_CONFIG",
+            {
+                "mikan": "https://mikanani.me/RSS/Search?searchstr=%s",
+            },
+        ):
             result = SearchTorrent.special_url(bangumi, "mikan")
 
         assert isinstance(result, RSSItem)
@@ -116,9 +151,12 @@ class TestSpecialUrl:
             subtitle=None,
         )
 
-        with patch("module.searcher.provider.SEARCH_CONFIG", {
-            "mikan": "https://mikanani.me/RSS/Search?searchstr=%s",
-        }):
+        with patch(
+            "module.searcher.provider.SEARCH_CONFIG",
+            {
+                "mikan": "https://mikanani.me/RSS/Search?searchstr=%s",
+            },
+        ):
             result = SearchTorrent.special_url(bangumi, "mikan")
 
         # Only title_raw should be in the URL

@@ -43,6 +43,11 @@ export interface RssParser {
   filter: Array<string>;
   language: TupleToUnion<RssParserLang>;
 }
+export interface Tvdb {
+  enable: boolean;
+  api_key: string;
+  language: TupleToUnion<RssParserLang>;
+}
 export interface BangumiManage {
   enable: boolean;
   eps_complete: boolean;
@@ -117,6 +122,7 @@ export interface Config {
   proxy: Proxy;
   notification: Notification;
   experimental_openai: ExperimentalOpenAI;
+  tvdb: Tvdb;
   security: Security;
 }
 
@@ -170,6 +176,11 @@ export const initConfig: Config = {
     api_type: 'openai',
     api_version: '2020-05-03',
     deployment_id: '',
+  },
+  tvdb: {
+    enable: false,
+    api_key: '',
+    language: 'jp',
   },
   security: {
     login_whitelist: [],

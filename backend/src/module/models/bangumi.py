@@ -8,6 +8,9 @@ from sqlmodel import Field, SQLModel
 class Bangumi(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
+    id_source: Optional[str] = Field(
+        default=None, alias="id_source", title="元数据来源"
+    )  # "tvdb" or "tmdb" - which API tvdb_id actually came from
     official_title: str = Field(
         default="official_title", alias="official_title", title="番剧中文名"
     )
@@ -56,6 +59,10 @@ class Bangumi(SQLModel, table=True):
 
 
 class BangumiUpdate(SQLModel):
+    tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
+    id_source: Optional[str] = Field(
+        default=None, alias="id_source", title="元数据来源"
+    )
     official_title: str = Field(
         default="official_title", alias="official_title", title="番剧中文名"
     )

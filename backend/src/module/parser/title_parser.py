@@ -9,6 +9,7 @@ from module.parser.analyser import (
     raw_parser,
     tmdb_parser,
     torrent_parser,
+    tvdb_parser,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,13 @@ class TitleParser:
         if tmdb_info:
             logger.debug("TMDB Matched, official title is %s", tmdb_info.title)
             tmdb_season = tmdb_info.last_season if tmdb_info.last_season else season
-            return tmdb_info.id, tmdb_info.title, tmdb_season, tmdb_info.year, tmdb_info.poster_link
+            return (
+                tmdb_info.id,
+                tmdb_info.title,
+                tmdb_season,
+                tmdb_info.year,
+                tmdb_info.poster_link,
+            )
         else:
             logger.warning(f"Cannot match {title} in TMDB. Use raw title instead.")
             logger.warning("Please change bangumi info manually.")
@@ -53,6 +60,38 @@ class TitleParser:
         else:
             logger.warning(
                 f"Cannot match {bangumi.official_title} in TMDB. Use raw title instead."
+            )
+            logger.warning("Please change bangumi info manually.")
+
+    @staticmethod
+    async def tvdb_parser(title: str, season: int, language: str):
+        tvdb_info = await tvdb_parser(title, language)
+        if tvdb_info:
+            logger.debug("TVDB Matched, official title is %s", tvdb_info.title)
+            tvdb_season = tvdb_info.last_season if tvdb_info.last_season else season
+            return (
+                tvdb_info.id,
+                tvdb_info.title,
+                tvdb_season,
+                tvdb_info.year,
+                tvdb_info.poster_link,
+            )
+        else:
+            logger.warning(f"Cannot match {title} in TVDB. Use raw title instead.")
+            logger.warning("Please change bangumi info manually.")
+            return None, title, season, None, None
+
+    @staticmethod
+    async def tvdb_poster_parser(bangumi: Bangumi):
+        tvdb_info = await tvdb_parser(
+            bangumi.official_title, settings.rss_parser.language
+        )
+        if tvdb_info:
+            logger.debug("TVDB Matched, official title is %s", tvdb_info.title)
+            bangumi.poster_link = tvdb_info.poster_link
+        else:
+            logger.warning(
+                f"Cannot match {bangumi.official_title} in TVDB. Use raw title instead."
             )
             logger.warning("Please change bangumi info manually.")
 
