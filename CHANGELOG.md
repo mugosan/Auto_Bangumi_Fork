@@ -1,5 +1,25 @@
 # [Unreleased]
 
+# [3.2.9-beta.2] - 2026-09-14
+
+## Backend
+
+### Changed
+
+- TheTVDB v4 API 现要求付费订阅才能使用，个人免费 Key 已失效：改为通过 TMDB 自带的 `external_ids` 接口交叉引用真实的 TheTVDB 剧集 ID —— 完全绕开 TheTVDB API，无需任何单独的 Key 或订阅。已用多部真实番剧（进击的巨人 → 267440、葬送的芙莉莲 → 424536、海盗战记 → 359274 等）实测验证，取得的均为真实、可在 thetvdb.com 核实的 ID
+- RSS 订阅解析方式 `tvdb` 与 `tmdb` 合并为同一逻辑（均通过 TMDB 解析，附带 TVDB ID 交叉引用）；`tvdb` 仅为兼容已保存的旧订阅而保留
+
+### Removed
+
+- 移除已失效的 TheTVDB v4 API 直连客户端 (`tvdb_parser.py`) 及其 26 个测试
+- 移除 `TVDBConfig`（`enable`/`api_key`/`language`）—— 现在无需任何配置，`tmdb` 解析方式即自动附带 TVDB ID
+
+## Frontend
+
+### Removed
+
+- 移除 TVDB 设置面板 (`config-tvdb.vue`) 和订阅解析方式下拉框中的 `tvdb` 选项 —— 默认的 `tmdb` 选项已自动获取 TVDB ID，无需单独选择
+
 # [3.2.9-beta.1] - 2026-09-13
 
 Merges upstream `3.2-dev` (through `3.2.8`) into this fork's own work below.
