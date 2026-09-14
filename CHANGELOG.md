@@ -1,6 +1,6 @@
 # [Unreleased]
 
-# [3.2.8+fork.1] - 2026-09-13
+# [3.2.9-beta.1] - 2026-09-13
 
 Merges upstream `3.2-dev` (through `3.2.8`) into this fork's own work below.
 
