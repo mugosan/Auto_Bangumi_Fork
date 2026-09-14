@@ -1,6 +1,8 @@
 # [Unreleased]
 
-# [3.2.7-beta.3] - 2026-09-13
+# [3.2.8+fork.1] - 2026-09-13
+
+Merges upstream `3.2-dev` (through `3.2.8`) into this fork's own work below.
 
 ## Backend
 
@@ -10,6 +12,48 @@
 - 新增 `id_source` 字段区分 `tvdb_id` 实际来自 TVDB 还是 TMDB 回退，下载目录标签相应显示为 `[tvdb-N]` 或 `[tmdb-N]`（此前无论数据来源一律错误标记为 `[tmdb-N]`）
 - 新增 `TVDBConfig` 配置项（`enable`/`api_key`/`language`），可在 WebUI 设置页启用（此前该功能没有任何开关入口）
 - 数据库迁移 v10/v11：为 `bangumi` 表补充 `tvdb_id`、`id_source` 列，修复此前无迁移导致部分安装环境缺列的问题
+
+### Fixed
+
+- 修复 `BangumiUpdate` 缺少 `tvdb_id` 字段导致编辑番剧规则（`PATCH /bangumi/update/{id}`）时 `_gen_save_path` 抛出未捕获 `AttributeError`（500 错误）的问题
+
+## Frontend
+
+### Added
+
+- 新增 TVDB 设置面板 (`config-tvdb.vue`)，支持启用/配置 TVDB API Key 和语言
+- 订阅解析方式下拉框新增 `tvdb` 选项，移除后端从未处理过的无效 `parser` 占位选项
+
+# [3.2.8] - 2026-07-02
+
+## Backend
+
+### Fixed
+
+- 修复 qBittorrent ≥ 5.2 登录失败：新版登录成功返回 HTTP 204 空响应体，旧代码要求 200 + "Ok." 导致认证失败 (#1044, #1034, #1043)
+- 修复删除番剧/种子时文件不被删除：hashes 列表未按 qB API 要求以 `|` 拼接且响应状态未校验，删除失败现在会正确上报到 WebUI (#1046)
+- 修复下载器认证失败时 httpx 连接池泄漏：连接失败后正确关闭客户端 (#1043)
+- 加固初始设置接口：`/setup/test-downloader` 增加 URL 协议校验，所有 setup 接口不再回显原始错误详情 (#1041)
+- 修复同一站点多个 RSS 并发请求触发 HTTP 429：按主机分组串行抓取并加入间隔，不同主机仍并行 (#1026)
+- 修复 OpenAI 解析阻塞事件循环：切换到 AsyncOpenAI 异步客户端
+- 修复番剧缓存的失效竞态：加锁并引入代数计数，防止过期快照覆盖较新的失效
+- 修复无 `[字幕组]` 前缀的标题被解析器破坏 (#1025)
+- 共享 httpx 客户端跟随 302 重定向（mikanime.tv 镜像域名） (#983)
+- 修复 Linux 主机解析 Windows qBittorrent 保存路径导致季度总被置为 01 (#1016)
+- 加固共享 httpx 客户端：缩短 keepalive 防止陈旧连接风暴 (#1018, #1028, #984)
+- 删除 RSS 订阅时级联删除其种子记录，侧边栏不再残留条目 (#1019)
+- 探测 qBittorrent 时遵循 SSL 设置 (#1014)
+
+### Maintenance
+
+- 发布包纳入 `pyproject.toml` / `uv.lock` / `requirements.txt` (#994, #1015)
+- 容器启动 chown 跳过 `.venv`，加快启动 (#1011)
+
+# [3.2.6] - 2026-03-01
+
+## Backend
+
+### Added
 
 - 新增 `Security` 配置模型，支持登录 IP 白名单、MCP IP 白名单和 Bearer Token 认证
 - 新增登录端点 IP 白名单检查中间件 (`check_login_ip`)
@@ -22,7 +66,6 @@
 
 ### Fixed
 
-- 修复 `BangumiUpdate` 缺少 `tvdb_id` 字段导致编辑番剧规则（`PATCH /bangumi/update/{id}`）时 `_gen_save_path` 抛出未捕获 `AttributeError`（500 错误）的问题
 - 修复 qBittorrent 下载器 SSL 连接问题：解耦 HTTPS 协议选择与证书验证，自签名证书不再导致连接失败 (#923)
 - 修复 `torrents_rename_file` 重命名验证循环中 `continue` 应为 `break` 的逻辑错误
 
@@ -46,8 +89,6 @@
   - 使用 vuedraggable 实现流畅拖拽动画
 - 新增安全设置组件 (`config-security.vue`)，支持在 WebUI 中配置 IP 白名单和 Token
 - 前端 `Security` 类型定义和初始化配置
-- 新增 TVDB 设置面板 (`config-tvdb.vue`)，支持启用/配置 TVDB API Key 和语言
-- 订阅解析方式下拉框新增 `tvdb` 选项，移除后端从未处理过的无效 `parser` 占位选项
 
 ---
 
