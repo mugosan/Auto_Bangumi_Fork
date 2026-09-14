@@ -45,6 +45,9 @@ class TMDBInfo:
     year: str
     poster_link: str | None = None
     series_status: str | None = None  # "Ended", "Returning Series", etc.
+    tvdb_id: int | None = (
+        None  # TheTVDB series id, via TMDB's own external_ids cross-reference
+    )
     season_episode_counts: dict[int, int] | None = None  # {1: 13, 2: 12, ...}
     virtual_season_starts: dict[int, list[int]] | None = (
         None  # {1: [1, 29], ...} - episode numbers where virtual seasons start
@@ -96,6 +99,24 @@ def info_url(e, key):
 
 def season_url(tv_id, season_number, key):
     return f"{_tmdb_url()}/3/tv/{tv_id}/season/{season_number}?api_key={_api_key()}&language={LANGUAGE[key]}"
+
+
+def external_ids_url(tv_id):
+    return f"{_tmdb_url()}/3/tv/{tv_id}/external_ids?api_key={_api_key()}"
+
+
+async def get_tvdb_id(tv_id, req: RequestContent) -> int | None:
+    """Cross-reference TMDB's own external_ids for the real TheTVDB series id.
+
+    TheTVDB's own v4 API now requires an active paid subscription for most
+    usage, so this uses TMDB's own sanctioned metadata instead -- no
+    separate TVDB API key/subscription needed.
+    """
+    data = await req.get_json(external_ids_url(tv_id))
+    if not data:
+        return None
+    tvdb_id = data.get("tvdb_id")
+    return int(tvdb_id) if tvdb_id else None
 
 
 async def is_animation(tv_id, language, req: RequestContent) -> bool:
@@ -344,6 +365,11 @@ async def tmdb_parser(
                 ],
                 return_exceptions=True,
             )
+            try:
+                tvdb_id = await get_tvdb_id(matched_id, req)
+            except Exception as e:
+                logger.warning("Failed to fetch external_ids: %s", e)
+                tvdb_id = None
             for (season_num, total_eps), episodes in zip(season_nums, episode_results):
                 if isinstance(episodes, BaseException):
                     logger.warning(
@@ -395,6 +421,7 @@ async def tmdb_parser(
                 year=str(year_number),
                 poster_link=poster_link,
                 series_status=series_status,
+                tvdb_id=tvdb_id,
                 season_episode_counts=season_episode_counts,
                 virtual_season_starts=(
                     virtual_season_starts if virtual_season_starts else None

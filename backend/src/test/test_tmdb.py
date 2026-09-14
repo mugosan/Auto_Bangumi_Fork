@@ -78,6 +78,62 @@ async def test_tmdb_parser(mocker):
     assert tmdb_info.last_season == bangumi_season
 
 
+async def _fake_get_json_with_tvdb_id(url: str) -> dict:
+    if "/external_ids" in url:
+        return {"tvdb_id": 359274}
+    return await _fake_get_json(url)
+
+
+async def test_tmdb_parser_cross_references_real_tvdb_id(mocker):
+    """tmdb_parser also resolves the real TheTVDB series id via TMDB's own
+    external_ids endpoint -- no separate TVDB API key/subscription needed."""
+    mocker.patch.object(
+        tmdb_parser_module.RequestContent,
+        "get_json",
+        side_effect=_fake_get_json_with_tvdb_id,
+    )
+    tmdb_parser_module._tmdb_cache.clear()
+
+    tmdb_info = await tmdb_parser("海盗战记", "zh", test=True)
+
+    assert tmdb_info is not None
+    assert tmdb_info.tvdb_id == 359274
+
+
+async def test_tmdb_parser_tvdb_id_none_when_no_cross_reference(mocker):
+    """When TMDB has no tvdb_id for the show, tvdb_id is None (caller falls
+    back to the TMDB id itself) rather than raising."""
+    mocker.patch.object(
+        tmdb_parser_module.RequestContent, "get_json", side_effect=_fake_get_json
+    )
+    tmdb_parser_module._tmdb_cache.clear()
+
+    tmdb_info = await tmdb_parser("海盗战记", "zh", test=True)
+
+    assert tmdb_info is not None
+    assert tmdb_info.tvdb_id is None
+
+
+async def test_tmdb_parser_tvdb_id_none_when_external_ids_fails(mocker):
+    """A failed/erroring external_ids call degrades to tvdb_id=None instead
+    of failing the whole tmdb_parser lookup."""
+
+    async def _flaky_get_json(url: str) -> dict:
+        if "/external_ids" in url:
+            raise RuntimeError("boom")
+        return await _fake_get_json(url)
+
+    mocker.patch.object(
+        tmdb_parser_module.RequestContent, "get_json", side_effect=_flaky_get_json
+    )
+    tmdb_parser_module._tmdb_cache.clear()
+
+    tmdb_info = await tmdb_parser("海盗战记", "zh", test=True)
+
+    assert tmdb_info is not None
+    assert tmdb_info.tvdb_id is None
+
+
 _MOVIE_SEARCH_RESULT = {
     "results": [
         {
@@ -318,3 +374,4 @@ async def test_tmdb_parser_live():
     assert tmdb_info.title == "冰海战记"
     assert tmdb_info.year == bangumi_year
     assert tmdb_info.last_season == bangumi_season
+    assert tmdb_info.tvdb_id == 359274

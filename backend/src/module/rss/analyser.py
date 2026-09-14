@@ -39,7 +39,7 @@ class RSSAnalyser:
                     if official_title:
                         movie.official_title = official_title
         elif rss.parser == "tmdb":
-            tmdb_title, _, year, poster_link = await TitleParser.tmdb_parser(
+            tmdb_title, _, year, poster_link, _, _ = await TitleParser.tmdb_parser(
                 movie.official_title,
                 1,
                 settings.rss_parser.language,
@@ -81,16 +81,20 @@ class RSSAnalyser:
                     if official_title:
                         bangumi.official_title = official_title
         elif rss.parser == "tmdb":
-            tmdb_title, season, year, poster_link = await TitleParser.tmdb_parser(
-                bangumi.official_title,
-                bangumi.season,
-                settings.rss_parser.language,
-                episode_type=bangumi.episode_type,
+            tmdb_title, season, year, poster_link, meta_id, id_source = (
+                await TitleParser.tmdb_parser(
+                    bangumi.official_title,
+                    bangumi.season,
+                    settings.rss_parser.language,
+                    episode_type=bangumi.episode_type,
+                )
             )
             bangumi.official_title = tmdb_title
             bangumi.year = year
             bangumi.season = season
             bangumi.poster_link = poster_link
+            bangumi.tvdb_id = meta_id
+            bangumi.id_source = id_source
         else:
             pass
         if bangumi.official_title:

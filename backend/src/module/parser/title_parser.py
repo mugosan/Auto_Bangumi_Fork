@@ -364,15 +364,32 @@ class TitleParser:
     async def tmdb_parser(
         title: str, season: int, language: str, episode_type: str = "episode"
     ):
+        """Match a title on TMDB and resolve its metadata id.
+
+        For non-movie lookups, returns the real TheTVDB series id when
+        TMDB's own ``external_ids`` cross-reference has one (no separate
+        TVDB API key/subscription needed), falling back to the TMDB id
+        itself when it doesn't. Movies don't get a tvdb id (id_source is
+        always "tmdb" for them, meta_id is TMDB's own movie id).
+        """
         tmdb_info = await tmdb_parser(title, language, is_movie=episode_type == "movie")
         if tmdb_info:
             logger.debug("TMDB Matched, official title is %s", tmdb_info.title)
             tmdb_season = tmdb_info.last_season if tmdb_info.last_season else season
-            return tmdb_info.title, tmdb_season, tmdb_info.year, tmdb_info.poster_link
+            meta_id = tmdb_info.tvdb_id or tmdb_info.id
+            id_source = "tvdb" if tmdb_info.tvdb_id else "tmdb"
+            return (
+                tmdb_info.title,
+                tmdb_season,
+                tmdb_info.year,
+                tmdb_info.poster_link,
+                meta_id,
+                id_source,
+            )
         else:
             logger.warning(f"Cannot match {title} in TMDB. Use raw title instead.")
             logger.warning("Please change bangumi info manually.")
-            return title, season, None, None
+            return title, season, None, None, None, "tmdb"
 
     @staticmethod
     async def tmdb_poster_parser(bangumi: Bangumi):

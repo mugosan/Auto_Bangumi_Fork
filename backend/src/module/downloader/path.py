@@ -80,7 +80,14 @@ def is_ep(file_path: PathLike[str] | str):
 
 def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
     title = data.official_title or "Unknown Bangumi"
-    folder = sanitize_path_fragment(f"{title} ({data.year})" if data.year else title)
+    base = f"{title} ({data.year})" if data.year else title
+    # tvdb_id/id_source only exist on Bangumi/BangumiUpdate (movies don't
+    # get a TVDB cross-reference); getattr keeps this shared with Movie.
+    tvdb_id = getattr(data, "tvdb_id", None)
+    if tvdb_id:
+        id_source = getattr(data, "id_source", None) or "tmdb"
+        base = f"{base} [{id_source}-{tvdb_id}]"
+    folder = sanitize_path_fragment(base)
     if folder:
         return folder
     # 标题全由保留字符组成时清洗结果为空——不能让所有这类条目

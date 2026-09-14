@@ -61,6 +61,10 @@ class Bangumi(SQLModel, table=True):
     episode_type: str = Field(
         default="episode", alias="episode_type", title="剧集类型"
     )  # "episode" | "movie" | "special"
+    tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
+    id_source: Optional[str] = Field(
+        default=None, alias="id_source", title="元数据来源"
+    )  # "tvdb" or "tmdb" - which id tvdb_id actually is
 
 
 class BangumiUpdate(SQLModel):
@@ -108,6 +112,10 @@ class BangumiUpdate(SQLModel):
     episode_type: str = Field(
         default="episode", alias="episode_type", title="剧集类型"
     )  # "episode" | "movie" | "special"
+    tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
+    id_source: Optional[str] = Field(
+        default=None, alias="id_source", title="元数据来源"
+    )
 
 
 class Notification(BaseModel):

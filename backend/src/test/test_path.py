@@ -102,6 +102,41 @@ class TestGenSavePath:
         assert "Test (2025)" in result
         assert "Season 3" in result
 
+    def test_folder_tags_real_tvdb_id(self):
+        """Folder is tagged [tvdb-<id>] when tvdb_id came from TVDB (via
+        TMDB's external_ids cross-reference, id_source='tvdb')."""
+        bangumi = make_bangumi(
+            official_title="My Anime", year="2024", tvdb_id=267440, id_source="tvdb"
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = gen_save_path(bangumi)
+
+        assert "My Anime (2024) [tvdb-267440]" in result
+
+    def test_folder_tags_tmdb_fallback_id(self):
+        """Folder is tagged [tmdb-<id>] when TMDB had no tvdb cross-reference
+        (id_source='tmdb', tvdb_id holds TMDB's own id)."""
+        bangumi = make_bangumi(
+            official_title="My Anime", year="2024", tvdb_id=12345, id_source="tmdb"
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = gen_save_path(bangumi)
+
+        assert "My Anime (2024) [tmdb-12345]" in result
+
+    def test_folder_omits_tag_when_no_id(self):
+        """No tag at all when tvdb_id is unset (e.g. mikan parser, or no
+        TMDB match) -- unlike always showing a bare '[tmdb-None]'."""
+        bangumi = make_bangumi(official_title="My Anime", year="2024", tvdb_id=None)
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            result = gen_save_path(bangumi)
+
+        assert result == "/downloads/Bangumi/My Anime (2024)/Season 1"
+        assert "[" not in result
+
     def test_movie_layout_omits_season_folder(self):
         """Movies use a flat 'Title (Year)' layout with no Season subfolder."""
         bangumi = make_bangumi(
