@@ -38,7 +38,6 @@ onActivated(() => {
       <div class="config-col">
         <config-normal></config-normal>
         <config-parser></config-parser>
-        <config-tvdb></config-tvdb>
         <config-download></config-download>
         <config-manage></config-manage>
       </div>

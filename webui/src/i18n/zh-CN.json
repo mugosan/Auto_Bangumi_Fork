@@ -87,13 +87,6 @@
       "mcp_whitelist": "MCP IP 白名单",
       "mcp_tokens": "MCP API 令牌"
     },
-    "tvdb_set": {
-      "title": "TVDB 设置",
-      "enable": "启用 TVDB 查询",
-      "api_key": "TVDB API 密钥",
-      "language": "语言",
-      "hint": "使用 TheTVDB v4 API 作为元数据来源（自动回退到 TMDB），下载文件夹会标记为 [tvdb-ID]，便于 Plex 的 HAMA 等插件识别。可在 thetvdb.com 免费注册获取 API 密钥。需在 RSS 订阅中将解析方式选为 \"tvdb\" 才会生效。"
-    },
     "search_provider_set": {
       "title": "搜索源设置",
       "add_new": "添加搜索源",

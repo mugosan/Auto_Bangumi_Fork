@@ -23,29 +23,20 @@ class RSSAnalyser(TitleParser):
             except AttributeError:
                 logger.warning("[Parser] Mikan torrent has no homepage info.")
                 pass
-        elif rss.parser == "tvdb":
-            meta_id, title, season, year, poster_link = await self.tvdb_parser(
-                bangumi.official_title, bangumi.season, settings.rss_parser.language
-            )
-            if meta_id is None:
-                logger.info("[Parser] TVDB lookup failed, falling back to TMDB")
-                meta_id, title, season, year, poster_link = await self.tmdb_parser(
+        elif rss.parser in ("tmdb", "tvdb"):
+            # "tvdb" is kept only for subscriptions saved before this fork
+            # dropped the separate TheTVDB-API-backed parser (it required a
+            # subscription most installs don't have) -- both values now
+            # resolve through TMDB, which also cross-references the real
+            # TheTVDB id via its own external_ids endpoint, no separate key
+            # needed.
+            meta_id, id_source, title, season, year, poster_link = (
+                await self.tmdb_parser(
                     bangumi.official_title, bangumi.season, settings.rss_parser.language
                 )
-                bangumi.id_source = "tmdb"
-            else:
-                bangumi.id_source = "tvdb"
-            bangumi.tvdb_id = meta_id
-            bangumi.official_title = title
-            bangumi.year = year
-            bangumi.season = season
-            bangumi.poster_link = poster_link
-        elif rss.parser == "tmdb":
-            meta_id, title, season, year, poster_link = await self.tmdb_parser(
-                bangumi.official_title, bangumi.season, settings.rss_parser.language
             )
             bangumi.tvdb_id = meta_id
-            bangumi.id_source = "tmdb"
+            bangumi.id_source = id_source
             bangumi.official_title = title
             bangumi.year = year
             bangumi.season = season

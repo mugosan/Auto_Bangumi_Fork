@@ -87,13 +87,6 @@
       "mcp_whitelist": "MCP IP Whitelist",
       "mcp_tokens": "MCP API Tokens"
     },
-    "tvdb_set": {
-      "title": "TVDB Settings",
-      "enable": "Enable TVDB Lookup",
-      "api_key": "TVDB API Key",
-      "language": "Language",
-      "hint": "Uses TheTVDB v4 API as the metadata source (with automatic TMDB fallback) so downloaded folders are tagged [tvdb-ID] for Plex agents like HAMA. Register a free API key at thetvdb.com. Select \"tvdb\" as the parser on an RSS subscription to use it."
-    },
     "search_provider_set": {
       "title": "Search Provider",
       "add_new": "Add Provider",

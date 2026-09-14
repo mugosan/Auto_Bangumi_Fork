@@ -56,7 +56,6 @@ declare module '@vue/runtime-core' {
     ConfigProxy: typeof import('./../../src/components/setting/config-proxy.vue')['default']
     ConfigSearchProvider: typeof import('./../../src/components/setting/config-search-provider.vue')['default']
     ConfigSecurity: typeof import('./../../src/components/setting/config-security.vue')['default']
-    ConfigTvdb: typeof import('./../../src/components/setting/config-tvdb.vue')['default']
     MediaQuery: typeof import('./../../src/components/media-query.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

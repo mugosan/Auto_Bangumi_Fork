@@ -15,7 +15,7 @@ const { t } = useMyI18n();
 
 const rss = ref<RSS>({ ...rssTemplate });
 const rule = defineModel<BangumiRule>('rule', { default: () => ({ ...ruleTemplate }) });
-const parserTypes = ['tmdb', 'tvdb', 'mikan'] as const;
+const parserTypes = ['tmdb', 'mikan'] as const;
 
 // UI state
 const step = ref<'input' | 'confirm'>('input');
