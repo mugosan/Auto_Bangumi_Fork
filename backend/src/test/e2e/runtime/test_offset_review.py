@@ -92,6 +92,13 @@ def test_offset_review_uses_only_real_episode_signals(
         request for request in journal if request["path"].startswith("/tmdb/")
     ]
     assert tmdb_requests
+    # external_ids (the TVDB-id cross-reference) returns a bare id number, not
+    # localized text -- the real TMDB API doesn't take a language param there
+    # at all, so it's excluded from the "every TMDB request is localized" check.
+    localized_requests = [
+        request for request in tmdb_requests if "/external_ids" not in request["path"]
+    ]
+    assert localized_requests
     assert all(
-        request["query"].get("language") == ["zh-CN"] for request in tmdb_requests
+        request["query"].get("language") == ["zh-CN"] for request in localized_requests
     )
