@@ -7,10 +7,6 @@ from sqlmodel import Field, SQLModel
 
 class Bangumi(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
-    tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
-    id_source: Optional[str] = Field(
-        default=None, alias="id_source", title="元数据来源"
-    )  # "tvdb" or "tmdb" - which API tvdb_id actually came from
     official_title: str = Field(
         default="official_title", alias="official_title", title="番剧中文名"
     )
@@ -56,13 +52,22 @@ class Bangumi(SQLModel, table=True):
     title_aliases: Optional[str] = Field(
         default=None, alias="title_aliases", title="标题别名"
     )  # JSON list: ["alt_title_1", "alt_title_2"]
-
-
-class BangumiUpdate(SQLModel):
+    preferred_group: Optional[str] = Field(
+        default=None, alias="preferred_group", title="偏好字幕组"
+    )
+    preferred_resolution: Optional[str] = Field(
+        default=None, alias="preferred_resolution", title="偏好分辨率"
+    )
+    episode_type: str = Field(
+        default="episode", alias="episode_type", title="剧集类型"
+    )  # "episode" | "movie" | "special"
     tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
     id_source: Optional[str] = Field(
         default=None, alias="id_source", title="元数据来源"
-    )
+    )  # "tvdb" or "tmdb" - which id tvdb_id actually is
+
+
+class BangumiUpdate(SQLModel):
     official_title: str = Field(
         default="official_title", alias="official_title", title="番剧中文名"
     )
@@ -98,12 +103,26 @@ class BangumiUpdate(SQLModel):
     title_aliases: Optional[str] = Field(
         default=None, alias="title_aliases", title="标题别名"
     )
+    preferred_group: Optional[str] = Field(
+        default=None, alias="preferred_group", title="偏好字幕组"
+    )
+    preferred_resolution: Optional[str] = Field(
+        default=None, alias="preferred_resolution", title="偏好分辨率"
+    )
+    episode_type: str = Field(
+        default="episode", alias="episode_type", title="剧集类型"
+    )  # "episode" | "movie" | "special"
+    tvdb_id: Optional[int] = Field(default=None, alias="tvdb_id", title="tvdb_id")
+    id_source: Optional[str] = Field(
+        default=None, alias="id_source", title="元数据来源"
+    )
 
 
 class Notification(BaseModel):
     official_title: str = Field(..., alias="official_title", title="番剧名")
     season: int = Field(..., alias="season", title="番剧季度")
-    episode: int = Field(..., alias="episode", title="番剧集数")
+    # int | float：总集篇等半集（12.5）在通知里保留小数 (#667)
+    episode: int | float = Field(..., alias="episode", title="番剧集数")
     poster_path: Optional[str] = Field(None, alias="poster_path", title="番剧海报路径")
 
 
@@ -115,10 +134,19 @@ class Episode:
     season: int
     season_raw: str
     episode: int
-    sub: str
+    sub: Optional[str]
     group: str
-    resolution: str
-    source: str
+    resolution: Optional[str]
+    source: Optional[str]
+    episode_type: str = "episode"  # "episode" | "movie" | "special"
+    is_movie: bool = False
+
+    def __post_init__(self) -> None:
+        """Keep the legacy movie flag and the typed classifier in sync."""
+        if self.is_movie:
+            self.episode_type = "movie"
+        elif self.episode_type == "movie":
+            self.is_movie = True
 
 
 @dataclass(slots=True)

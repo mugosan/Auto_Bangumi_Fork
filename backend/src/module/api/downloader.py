@@ -1,9 +1,15 @@
 import logging
+import re
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from module.database import Database
+from module.database.bangumi import (
+    build_save_path_index,
+    match_bangumi_in_list,
+    normalize_save_path,
+)
 from module.downloader import DownloadClient
 from module.security.api import get_current_user
 
@@ -23,6 +29,7 @@ class TorrentDeleteRequest(BaseModel):
 
 class TorrentTagRequest(BaseModel):
     """Request to tag a torrent with a bangumi ID."""
+
     hash: str
     bangumi_id: int
 
@@ -31,6 +38,42 @@ class TorrentTagRequest(BaseModel):
 async def get_torrents():
     async with DownloadClient() as client:
         return await client.get_torrent_info(category="Bangumi", status_filter=None)
+
+
+@router.get("/rename-conflicts", dependencies=[Depends(get_current_user)])
+async def get_rename_conflicts():
+    """List durable media rename conflicts awaiting user action."""
+
+    async with Database() as db:
+        rows = await db.rename_operation.list_conflicts()
+    return [row.model_dump(mode="json") for row in rows]
+
+
+@router.post(
+    "/rename-conflicts/{operation_id}/retry",
+    dependencies=[Depends(get_current_user)],
+)
+async def retry_rename_conflict(operation_id: int):
+    """Clear one terminal conflict so the next rename pass revalidates it."""
+
+    async with Database() as db:
+        row = await db.rename_operation.get(operation_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Rename conflict not found")
+        if row.state != "conflict" or row.kind != "conflict":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Only non-destructive terminal conflicts can be retried; "
+                    "replacement recovery state must be preserved"
+                ),
+            )
+        await db.rename_operation.delete(operation_id)
+    return {
+        "status": True,
+        "msg_en": "Rename conflict cleared; it will be revalidated",
+        "msg_zh": "重命名冲突已清除，将在下一轮重新校验",
+    }
 
 
 @router.post("/torrents/pause", dependencies=[Depends(get_current_user)])
@@ -71,8 +114,8 @@ async def tag_torrent(req: TorrentTagRequest):
     the renamer to look up the correct episode/season offset.
     """
     # Verify bangumi exists
-    with Database() as db:
-        bangumi = db.bangumi.search_id(req.bangumi_id)
+    async with Database() as db:
+        bangumi = await db.bangumi.search_id(req.bangumi_id)
         if not bangumi:
             return {
                 "status": False,
@@ -101,45 +144,48 @@ async def auto_tag_torrents():
     tagged_count = 0
     unmatched = []
 
+    # Load the bangumi list once and match in memory instead of running up to
+    # two DB queries (plus save_path fallback variations) per torrent.
+    async with Database() as db:
+        bangumi_list = await db.bangumi.search_all()
+    save_path_index = build_save_path_index(bangumi_list)
+
     async with DownloadClient() as client:
         # Get all Bangumi torrents
         torrents = await client.get_torrent_info(category="Bangumi", status_filter=None)
 
-        with Database() as db:
-            for torrent in torrents:
-                torrent_hash = torrent["hash"]
-                torrent_name = torrent["name"]
-                save_path = torrent["save_path"]
-                tags = torrent.get("tags", "")
+        for torrent in torrents:
+            torrent_hash = torrent["hash"]
+            torrent_name = torrent["name"]
+            save_path = torrent["save_path"]
+            tags = torrent.get("tags", "")
 
-                # Skip if already has ab: tag
-                if "ab:" in tags:
-                    continue
+            # Skip if already has an ab:<id> link tag。必须精确匹配数字 id：
+            # ab:renamed（处理完成标记）等同前缀标签不代表已关联番剧
+            if re.search(r"ab:\d+", tags):
+                continue
 
-                # Try to match bangumi
-                bangumi = None
+            # First try by torrent name, then fall back to save_path
+            bangumi = match_bangumi_in_list(torrent_name, bangumi_list)
+            if not bangumi:
+                bangumi = save_path_index.get(normalize_save_path(save_path))
 
-                # First try by torrent name
-                bangumi = db.bangumi.match_torrent(torrent_name)
-
-                # Then try by save_path
-                if not bangumi:
-                    bangumi = db.bangumi.match_by_save_path(save_path)
-
-                if bangumi and not bangumi.deleted:
-                    tag = f"ab:{bangumi.id}"
-                    await client.add_tag(torrent_hash, tag)
-                    tagged_count += 1
-                    logger.info(
-                        f"[AutoTag] Tagged '{torrent_name[:50]}...' with {tag} "
-                        f"(matched: {bangumi.official_title})"
-                    )
-                else:
-                    unmatched.append({
+            if bangumi and not bangumi.deleted:
+                tag = f"ab:{bangumi.id}"
+                await client.add_tag(torrent_hash, tag)
+                tagged_count += 1
+                logger.info(
+                    f"Tagged '{torrent_name[:50]}...' with {tag} "
+                    f"(matched: {bangumi.official_title})"
+                )
+            else:
+                unmatched.append(
+                    {
                         "hash": torrent_hash,
                         "name": torrent_name,
                         "save_path": save_path,
-                    })
+                    }
+                )
 
     return {
         "status": True,

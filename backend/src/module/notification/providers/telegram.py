@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from module.models.bangumi import Notification
 from module.notification.base import NotificationProvider
-from module.utils import load_image
+from module.utils import load_image, load_poster_url
 
 if TYPE_CHECKING:
     from module.models.config import NotificationProvider as ProviderConfig
@@ -17,7 +17,7 @@ class TelegramProvider(NotificationProvider):
     """Telegram Bot notification provider."""
 
     def __init__(self, config: "ProviderConfig"):
-        super().__init__()
+        super().__init__(config)
         token = config.token
         self.chat_id = config.chat_id
         self.photo_url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -33,12 +33,28 @@ class TelegramProvider(NotificationProvider):
             "disable_notification": True,
         }
 
-        photo = load_image(notification.poster_path)
-        if photo:
-            resp = await self.post_files(self.photo_url, data, files={"photo": photo})
-        else:
+        # 发图优先级：源 URL（Telegram 服务端拉图）→ 本地缓存 multipart 上传。
+        # 任一失败都降级发纯文本，通知内容不能因海报问题丢失（#1094）。
+        resp = None
+        photo_url = await load_poster_url(notification.poster_path)
+        if photo_url:
+            resp = await self.post_data(self.photo_url, {**data, "photo": photo_url})
+        if resp is None or resp.status_code != 200:
+            photo = await load_image(notification.poster_path)
+            if photo:
+                resp = await self.post_files(
+                    self.photo_url, data, files={"photo": photo}
+                )
+        if resp is None or resp.status_code != 200:
+            if resp is not None:
+                logger.warning(
+                    "Telegram sendPhoto failed (status %s), falling back to text.",
+                    resp.status_code,
+                )
             resp = await self.post_data(self.message_url, data)
 
+        if resp is None:
+            return False
         logger.debug("Telegram notification: %s", resp.status_code)
         return resp.status_code == 200
 
@@ -56,3 +72,13 @@ class TelegramProvider(NotificationProvider):
                 return False, f"Telegram API returned status {resp.status_code}"
         except Exception as e:
             return False, f"Telegram test failed: {e}"
+
+    async def _deliver_text(self, title: str, body: str) -> bool:
+        """Deliver a system event via Telegram."""
+        data = {
+            "chat_id": self.chat_id,
+            "text": f"{title}\n{body}",
+            "disable_notification": True,
+        }
+        resp = await self.post_data(self.message_url, data)
+        return resp.status_code == 200

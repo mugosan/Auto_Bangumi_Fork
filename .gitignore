@@ -191,6 +191,9 @@ lerna-debug.log*
 node_modules
 dist
 webui/.vite/deps/*
+webui/e2e/.auth/
+webui/playwright-report/
+webui/test-results/
 dist.zip
 dist-ssr
 *.local
@@ -216,7 +219,19 @@ dev-dist
 
 # test file
 test.*
+!webui/e2e/fixtures/test.ts
 
 # local config
 /backend/config/
 .claude/settings.local.json
+
+# Local runtime data (dev server DB/logs)
+/backend/data/
+
+# Local agent workspace (worktrees, session state) and task notes
+/.claude/
+/tasks/
+
+# Local dev environment (scripts/dev.sh) and design-tool state
+.dev/
+.impeccable/

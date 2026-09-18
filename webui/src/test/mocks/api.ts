@@ -5,16 +5,14 @@
 import type { BangumiAPI, BangumiRule } from '#/bangumi';
 import type { RSS } from '#/rss';
 import type { ApiSuccess } from '#/api';
-import type { LoginSuccess } from '#/auth';
+import type { SessionSuccess } from '#/auth';
 
 // ============================================================================
 // Auth Mocks
 // ============================================================================
 
-export const mockLoginSuccess: LoginSuccess = {
-  access_token: 'mock_access_token_123',
-  token_type: 'bearer',
-  expire: Date.now() + 86400000, // 24 hours from now
+export const mockSessionSuccess: SessionSuccess = {
+  authenticated: true,
 };
 
 export const mockApiSuccess: ApiSuccess = {
@@ -52,6 +50,9 @@ export const mockBangumiAPI: BangumiAPI = {
   weekday_locked: false,
   needs_review: false,
   needs_review_reason: null,
+  preferred_group: null,
+  preferred_resolution: null,
+  episode_type: 'episode',
 };
 
 export const mockBangumiRule: BangumiRule = {
@@ -126,6 +127,7 @@ export const mockConfig = {
   },
   rss_parser: {
     enable: true,
+    engine: 'classic',
     filter: ['720', '\\d+-\\d'],
     language: 'zh',
   },
@@ -133,8 +135,10 @@ export const mockConfig = {
     enable: true,
     eps_complete: false,
     rename_method: 'pn',
+    revision_conflict_policy: 'hold',
     group_tag: false,
     remove_bad_torrent: false,
+    track_orphans: true,
   },
   log: {
     debug_enable: false,
@@ -147,11 +151,24 @@ export const mockConfig = {
     username: '',
     password: '',
   },
+  network: {
+    tmdb_base_url: 'https://api.themoviedb.org',
+    tmdb_api_key: '',
+    bgm_base_url: 'https://api.bgm.tv',
+  },
   notification: {
     enable: false,
     type: 'telegram',
     token: '',
     chat_id: '',
+  },
+  llm: {
+    enable: false,
+    provider: 'openai',
+    api_key: '',
+    model: 'gpt-4o-mini',
+    base_url: '',
+    mode: 'fallback',
   },
   experimental_openai: {
     enable: false,

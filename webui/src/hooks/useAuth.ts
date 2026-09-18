@@ -35,15 +35,16 @@ export const useAuth = createSharedComposable(() => {
   }
 
   function login() {
-    if (!formVerify()) return;
+    if (!formVerify()) return Promise.resolve();
 
-    apiAuth
+    // 返回 promise：登录页据此维持 loading 状态、等待跳转完成
+    return apiAuth
       .login(user.username, user.password)
       .then(() => {
         isLoggedIn.value = true;
         clearUser();
         message.success(t('notify.login_success'));
-        router.replace({ name: 'Index' });
+        return router.replace({ name: 'Index' });
       })
       .catch((err: ApiError) => {
         if (err.status === 404) {
@@ -57,6 +58,9 @@ export const useAuth = createSharedComposable(() => {
     onSuccess() {
       clearUser();
       isLoggedIn.value = false;
+      // 主动登出后登录页不要自动弹 passkey——反射式的指纹确认会把
+      // 用户直接又登回去；只压制紧接着的这一次
+      sessionStorage.setItem('suppressPasskeyAutoPrompt', '1');
       router.replace({ name: 'Login' });
     },
   });
@@ -71,15 +75,17 @@ export const useAuth = createSharedComposable(() => {
   function update() {
     if (!formVerify()) return;
 
-    apiAuth.update(user.username, user.password).then((res) => {
-      if (res.message.toLocaleLowerCase() === 'update success') {
+    return apiAuth
+      .update(user.username, user.password)
+      .then(() => {
         clearUser();
         message.success(t('notify.update_success'));
-      } else {
+      })
+      .catch(() => {
+        // The response interceptor already surfaces the request failure. Keep
+        // the username for retry, but do not retain the submitted password.
         user.password = '';
-        message.error(t('notify.update_failed'));
-      }
-    });
+      });
   }
 
   return {

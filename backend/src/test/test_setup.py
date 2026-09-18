@@ -1,20 +1,53 @@
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from module.api.deps import get_context
 from module.api.setup import SENTINEL_PATH, router
+from module.models.user import User
+from module.security.api import get_auth_service
+from module.security.jwt import get_password_hash
 
 
 @pytest.fixture
-def client():
+def mock_ctx():
+    """Mock AppContext whose lifecycle methods are awaitable no-ops."""
+    ctx = MagicMock()
+    ctx.reload_settings = AsyncMock()
+    ctx.start_tasks = AsyncMock()
+    return ctx
+
+
+@pytest.fixture
+def auth_service():
+    service = MagicMock()
+    service.authenticate_api_token = AsyncMock(return_value=None)
+    service.authenticate_session = AsyncMock(return_value=None)
+    service.get_user = AsyncMock(
+        return_value=User(
+            id=1,
+            username="admin",
+            password="hashed-password",
+            enabled=True,
+        )
+    )
+    service.update_user = AsyncMock()
+    return service
+
+
+@pytest.fixture
+def client(mock_ctx, auth_service):
     """Create a test client for the FastAPI app."""
     from fastapi import FastAPI
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
-    return TestClient(app)
+    app.dependency_overrides[get_context] = lambda: mock_ctx
+    app.dependency_overrides[get_auth_service] = lambda: auth_service
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -293,6 +326,112 @@ class TestRequestValidation:
         assert response.status_code == 422
 
 
+class TestSetupComplete:
+    """Issue: setup wizard must route config reload through AppContext, not
+    mutate settings.__dict__ directly (the shared httpx client, notifier, and
+    scheduler must be rebuilt after first-run setup)."""
+
+    @staticmethod
+    def _payload():
+        return {
+            "username": "testuser",
+            "password": "testpassword123",
+            "downloader_type": "qbittorrent",
+            "downloader_host": "localhost:8080",
+            "downloader_username": "admin",
+            "downloader_password": "admin",
+            "downloader_path": "/downloads",
+            "downloader_ssl": False,
+            "rss_url": "",
+            "rss_name": "",
+            "notification_enable": False,
+            "notification_type": "telegram",
+            "notification_token": "",
+            "notification_chat_id": "",
+        }
+
+    def test_complete_routes_through_ctx_reload_settings(
+        self, client, mock_first_run, mock_ctx, auth_service
+    ):
+        """A successful /setup/complete call saves the config and awaits
+        ctx.reload_settings(), instead of poking settings.__dict__ directly."""
+        auth_service.authenticate_session.return_value = User(
+            id=7,
+            username="renamed_admin",
+            password="hashed-password",
+            enabled=True,
+        )
+        client.cookies.set("token", "pre-setup-session")
+        response = client.post("/api/v1/setup/complete", json=self._payload())
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] is True
+        auth_service.get_user.assert_not_awaited()
+        auth_service.update_user.assert_awaited_once()
+        user_id, update = auth_service.update_user.await_args.args
+        assert user_id == 7
+        assert update.username == "testuser"
+        assert update.password == "testpassword123"
+        assert "token=" in response.headers["set-cookie"]
+        assert "Max-Age=0" in response.headers["set-cookie"]
+        mock_ctx.reload_settings.assert_awaited_once()
+        mock_ctx.start_tasks.assert_awaited_once()
+
+    def test_default_admin_fallback_passes_its_stable_id_to_completion(
+        self, client, mock_first_run, auth_service
+    ):
+        default_admin = User(
+            id=11,
+            username="admin",
+            password=get_password_hash("adminadmin"),
+            enabled=True,
+        )
+        with patch("module.api.setup.Database") as mock_db_cls:
+            db_instance = AsyncMock()
+            db_instance.user.get_user = AsyncMock(return_value=default_admin)
+            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=db_instance)
+            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            response = client.post("/api/v1/setup/complete", json=self._payload())
+
+        assert response.status_code == 200
+        assert auth_service.update_user.await_args.args[0] == 11
+        auth_service.get_user.assert_not_awaited()
+
+    @pytest.mark.parametrize("admin_password", ["adminadmin", "already-changed"])
+    def test_api_token_cannot_authorize_setup(
+        self, client, mock_first_run, auth_service, admin_password
+    ):
+        """Automation credentials cannot become account-recovery credentials."""
+        auth_service.authenticate_api_token.return_value = User(
+            id=2,
+            username="automation",
+            password="hashed-password",
+            enabled=True,
+        )
+        changed_admin = User(
+            id=1,
+            username="admin",
+            password=get_password_hash(admin_password),
+            enabled=True,
+        )
+        with patch("module.api.setup.Database") as mock_db_cls:
+            db_instance = AsyncMock()
+            db_instance.user.get_user = AsyncMock(return_value=changed_admin)
+            mock_db_cls.return_value.__aenter__ = AsyncMock(return_value=db_instance)
+            mock_db_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            response = client.post(
+                "/api/v1/setup/complete",
+                headers={"Authorization": "Bearer automation-token"},
+                json=self._payload(),
+            )
+
+        assert response.status_code == 403
+        auth_service.update_user.assert_not_awaited()
+
+
 class TestSentinelPath:
     def test_sentinel_path_is_in_config_dir(self):
         assert str(SENTINEL_PATH) == "config/.setup_complete"
@@ -327,6 +466,54 @@ class TestTestDownloaderHardening:
                 "ssl": False,
             },
         )
+
+    def _post_aria2(self, client, host="192.168.1.100:6800", password="secret"):
+        return client.post(
+            "/api/v1/setup/test-downloader",
+            json={
+                "type": "aria2",
+                "host": host,
+                "username": "",
+                "password": password,
+                "ssl": False,
+            },
+        )
+
+    def test_aria2_getversion_success(self, client, mock_first_run):
+        """aria2 is probed via JSON-RPC getVersion, not the qB login flow."""
+        from unittest.mock import MagicMock
+
+        rpc_resp = MagicMock(status_code=200)
+        rpc_resp.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": "ab-setup",
+            "result": {"version": "1.37.0"},
+        }
+        cls_patch = self._mock_client(login_resp=rpc_resp)
+        try:
+            response = self._post_aria2(client)
+        finally:
+            cls_patch.stop()
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    def test_aria2_bad_secret_fails(self, client, mock_first_run):
+        """aria2 answering 401 (bad RPC secret) must not be reported as success."""
+        from unittest.mock import MagicMock
+
+        rpc_resp = MagicMock(status_code=401)
+        rpc_resp.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": "ab-setup",
+            "error": {"code": 1, "message": "Unauthorized"},
+        }
+        cls_patch = self._mock_client(login_resp=rpc_resp)
+        try:
+            response = self._post_aria2(client)
+        finally:
+            cls_patch.stop()
+        assert response.status_code == 200
+        assert response.json()["success"] is False
 
     def test_login_accepts_204_empty_body(self, client, mock_first_run):
         """qBittorrent >= 5.2 returns 204 + empty body on successful login."""
@@ -379,9 +566,7 @@ class TestTestDownloaderHardening:
         from unittest.mock import MagicMock
 
         get_resp = MagicMock(text="qBittorrent WebUI")
-        login_resp = MagicMock(
-            status_code=200, text="<html><body>portal</body></html>"
-        )
+        login_resp = MagicMock(status_code=200, text="<html><body>portal</body></html>")
         cls_patch = self._mock_client(get_resp=get_resp, login_resp=login_resp)
         try:
             response = self._post(client)

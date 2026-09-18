@@ -8,14 +8,9 @@ import re
 
 import pytest
 
-from module.models import EpisodeFile
 from module.manager.renamer import Renamer
-from module.parser.analyser.raw_parser import (
-    get_group,
-    process,
-    raw_parser,
-)
-
+from module.models import EpisodeFile
+from module.parser.analyser.raw_parser import get_group, raw_parser
 
 # ---------------------------------------------------------------------------
 # Issue #986: Parser fails on [group][title][episode_text] format
@@ -28,7 +23,7 @@ from module.parser.analyser.raw_parser import (
 
 
 class TestIssue986AtlasSubGroupFormat:
-    """Issue #986: Parser crashes on Atlas subtitle group naming convention."""
+    """Issue #986: Parser now handles Atlas subtitle group naming convention."""
 
     ATLAS_TITLES = [
         "[阿特拉斯字幕组·雪原市出差所][命运-奇异赝品_Fate／strange Fake][04_半神们的卡农曲][简繁日内封PGS][日语配音版_Japanese Dub][Web-DL Remux][1080p AVC AAC].mkv",
@@ -36,44 +31,28 @@ class TestIssue986AtlasSubGroupFormat:
         "[阿特拉斯字幕组·雪原市出差所][命运-奇异赝品_Fate／strange Fake][03_无英灵的战斗][简繁日内封PGS][日语配音版_Japanese Dub][Web-DL Remux][1080p AVC AAC].mkv",
     ]
 
-    def test_get_group_extracts_atlas_group(self):
-        """get_group should extract the group name from [group][title][ep] format."""
-        name = "[阿特拉斯字幕组·雪原市出差所][命运-奇异赝品_Fate／strange Fake][04_半神们的卡农曲]"
-        group = get_group(name)
-        assert group == "阿特拉斯字幕组·雪原市出差所"
-
-    def test_process_returns_none_for_atlas_format(self):
-        """process() currently returns None for Atlas format (bug demonstration)."""
-        title = self.ATLAS_TITLES[0]
-        result = process(title)
-        # BUG: process returns None because TITLE_RE doesn't match this format
-        assert result is None, (
-            "If this passes, the parser still can't handle Atlas format. "
-            "If it fails (result is not None), the bug may have been fixed!"
-        )
-
-    def test_raw_parser_returns_none_for_atlas_format(self):
-        """raw_parser returns None for Atlas format, causing AttributeError downstream."""
-        title = self.ATLAS_TITLES[0]
+    @pytest.mark.parametrize(
+        "title,expected_ep",
+        [
+            (ATLAS_TITLES[0], 4),
+            (ATLAS_TITLES[1], 7),
+            (ATLAS_TITLES[2], 3),
+        ],
+    )
+    def test_atlas_titles_parse_successfully(self, title, expected_ep):
+        """All Atlas format titles now parse correctly."""
         result = raw_parser(title)
-        # BUG: returns None → downstream code does .groups() on None → AttributeError
-        assert result is None
+        assert result is not None
+        assert result.group == "阿特拉斯字幕组·雪原市出差所"
+        assert result.title_zh == "命运-奇异赝品"
+        assert result.episode == expected_ep
+        assert result.resolution == "1080p"
 
-    @pytest.mark.parametrize("title", ATLAS_TITLES)
-    def test_atlas_titles_all_fail_to_parse(self, title):
-        """All Atlas format titles fail to parse."""
-        result = raw_parser(title)
-        assert result is None
-
-    def test_get_group_returns_empty_for_no_brackets(self):
-        """get_group returns empty string for title without brackets (regression guard)."""
-        result = get_group("No Brackets Title")
-        assert result == ""
-
-    def test_get_group_does_not_crash_on_empty_string(self):
-        """get_group handles empty string without crashing."""
-        result = get_group("")
-        assert result == ""
+    def test_atlas_title_en_extracted(self):
+        """Atlas format extracts English title from underscore-separated text."""
+        result = raw_parser(self.ATLAS_TITLES[0])
+        assert result is not None
+        assert result.title_en == "Fate\uff0fstrange Fake"
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +150,7 @@ class TestIssue977EpisodeZeroOffset:
 class TestIssue976NoneInMatchList:
     """Issue #976: match_list should handle None titles gracefully."""
 
-    def test_match_list_filters_none_title_raw(self, db_session):
+    async def test_match_list_filters_none_title_raw(self, db_session):
         """match_list should skip bangumi with title_raw=None."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
@@ -185,11 +164,11 @@ class TestIssue976NoneInMatchList:
             title_raw="[Group] Normal Anime",
             season=1,
         )
-        db.add(b1)
+        await db.add(b1)
 
         # The match_list code now checks `if m.title_raw:` before adding to index
         # This test verifies that path works when all entries are valid
-        match_datas = db.search_all()
+        match_datas = await db.search_all()
         title_index = {}
         for m in match_datas:
             if m.title_raw:
@@ -203,31 +182,31 @@ class TestIssue976NoneInMatchList:
         """Demonstrate that sorted() with None keys crashes (the original bug)."""
         title_index = {"valid_title": "data", None: "bad_data"}
         with pytest.raises(TypeError, match="'NoneType'"):
-            sorted(title_index.keys(), key=len, reverse=True)
+            sorted(title_index.keys(), key=len, reverse=True)  # type: ignore[arg-type]
 
     def test_empty_title_index_produces_empty_pattern(self):
         """When all titles are None/empty, the regex pattern should be empty."""
-        title_index = {}
+        title_index: dict[str, str] = {}
         sorted_titles = sorted(title_index.keys(), key=len, reverse=True)
         pattern = "|".join(re.escape(t) for t in sorted_titles)
         assert pattern == ""
 
     def test_get_group_no_brackets_returns_empty(self):
         """get_group handles names without brackets (regression for IndexError)."""
-        # The original code did: re.split(r"[\[\]]", name)[1]
-        # which crashes with IndexError when there are no brackets
-        result = get_group("No Brackets At All")
-        assert result == ""
+        assert get_group("No Brackets At All") == ""
 
     def test_get_group_single_bracket_pair(self):
-        """get_group extracts group from single bracket pair."""
-        result = get_group("[GroupName] Some Title")
-        assert result == "GroupName"
+        """get_group extracts the first square-bracket group."""
+        assert get_group("[GroupName] Some Title") == "GroupName"
 
     def test_get_group_empty_brackets(self):
-        """get_group handles empty brackets."""
-        result = get_group("[] empty")
-        assert result == ""
+        """get_group handles an empty bracket pair."""
+        assert get_group("[] empty") == ""
+
+    def test_raw_parser_extracts_group_from_brackets(self):
+        result = raw_parser("[GroupName] Some Title - 01")
+        assert result is not None
+        assert result.group == "GroupName"
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +240,9 @@ class TestIssue974FilterPatternError:
 
     def test_engine_handles_unterminated_bracket(self):
         """_get_filter_pattern falls back to literal matching for invalid regex."""
-        from module.rss.engine import RSSEngine
         from unittest.mock import MagicMock
+
+        from module.rss.engine import RSSEngine
 
         engine = RSSEngine.__new__(RSSEngine)
         engine._filter_cache = {}
@@ -349,7 +329,7 @@ class TestIssue990NumberPrefixTitle:
         assert result.official_title == "29 岁单身中坚冒险家的日常"
         assert result.title_raw == "29 岁单身中坚冒险家的日常"
 
-    def test_add_title_alias_rejects_none(self, db_session):
+    async def test_add_title_alias_rejects_none(self, db_session):
         """add_title_alias should reject None as alias."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
@@ -361,14 +341,14 @@ class TestIssue990NumberPrefixTitle:
             season=1,
         )
         db_session.add(bangumi)
-        db_session.commit()
+        await db_session.commit()
 
-        result = db.add_title_alias(bangumi.id, None)
+        result = await db.add_title_alias(bangumi.id, None)
         assert result is False
         # Verify no alias was stored
         assert bangumi.title_aliases is None
 
-    def test_add_title_alias_rejects_empty_string(self, db_session):
+    async def test_add_title_alias_rejects_empty_string(self, db_session):
         """add_title_alias should reject empty string as alias."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
@@ -380,9 +360,9 @@ class TestIssue990NumberPrefixTitle:
             season=1,
         )
         db_session.add(bangumi)
-        db_session.commit()
+        await db_session.commit()
 
-        result = db.add_title_alias(bangumi.id, "")
+        result = await db.add_title_alias(bangumi.id, "")
         assert result is False
 
     def test_get_aliases_list_filters_null_values(self):
@@ -399,20 +379,20 @@ class TestIssue990NumberPrefixTitle:
         bangumi.title_aliases = '[null, "valid_alias", null, "another"]'
         assert _get_aliases_list(bangumi) == ["valid_alias", "another"]
 
-    def test_get_all_title_patterns_skips_none_title_raw(self, db_session):
+    async def test_get_all_title_patterns_skips_none_title_raw(self, db_session):
         """get_all_title_patterns should return empty list when title_raw is None."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
 
         db = BangumiDatabase(db_session)
         bangumi = Bangumi(official_title="Test Anime")
-        bangumi.title_raw = None
+        bangumi.title_raw = None  # type: ignore[assignment]  # simulating corrupted data
         bangumi.title_aliases = None
 
         patterns = db.get_all_title_patterns(bangumi)
         assert patterns == []
 
-    def test_match_torrent_no_crash_on_none_title_raw(self, db_session):
+    async def test_match_torrent_no_crash_on_none_title_raw(self, db_session):
         """match_torrent should not crash when a bangumi has None title_raw."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
@@ -423,17 +403,17 @@ class TestIssue990NumberPrefixTitle:
             official_title="29岁单身冒险家的日常",
             season=1,
         )
-        bangumi.title_raw = None
+        bangumi.title_raw = None  # type: ignore[assignment]  # simulating corrupted data
         db_session.add(bangumi)
-        db_session.commit()
+        await db_session.commit()
 
         # Should not raise TypeError: 'in <string>' requires string
-        result = db.match_torrent(
+        result = await db.match_torrent(
             "[ANi] 29 岁单身中坚冒险家的日常 - 07 [1080P][Baha][WEB-DL]"
         )
         assert result is None
 
-    def test_match_torrent_no_crash_on_null_aliases(self, db_session):
+    async def test_match_torrent_no_crash_on_null_aliases(self, db_session):
         """match_torrent should not crash when title_aliases contains null."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
@@ -446,26 +426,27 @@ class TestIssue990NumberPrefixTitle:
         )
         bangumi.title_aliases = "[null]"
         db_session.add(bangumi)
-        db_session.commit()
+        await db_session.commit()
 
         # Should not crash — null aliases are filtered out
-        result = db.match_torrent(
+        result = await db.match_torrent(
             "[ANi] 29岁单身冒险家的日常 - 07 [1080P][Baha][WEB-DL]"
         )
         assert result is not None
         assert result.official_title == "29岁单身冒险家的日常"
 
-    def test_match_list_no_crash_on_corrupted_data(self, db_session):
+    async def test_match_list_no_crash_on_corrupted_data(self, db_session):
         """match_list should handle bangumi with None title_raw and null aliases."""
+        from unittest.mock import MagicMock
+
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
-        from unittest.mock import MagicMock
 
         db = BangumiDatabase(db_session)
 
         # Insert corrupted bangumi (title_raw=None, aliases=[null])
         bangumi = Bangumi(official_title="29岁单身冒险家的日常", season=1)
-        bangumi.title_raw = None
+        bangumi.title_raw = None  # type: ignore[assignment]  # simulating corrupted data
         bangumi.title_aliases = "[null]"
         db_session.add(bangumi)
 
@@ -476,13 +457,13 @@ class TestIssue990NumberPrefixTitle:
             season=1,
         )
         db_session.add(valid)
-        db_session.commit()
+        await db_session.commit()
 
         torrent = MagicMock()
         torrent.name = "[ANi] 29 岁单身中坚冒险家的日常 - 07 [1080P]"
 
         # Should not crash even with corrupted data in the DB
-        unmatched = db.match_list([torrent], "https://mikanani.me/RSS/test")
+        await db.match_list([torrent], "https://mikanani.me/RSS/test")
 
 
 # ---------------------------------------------------------------------------
@@ -495,25 +476,42 @@ class TestIssue990NumberPrefixTitle:
 
 
 class TestIssue992NonEpisodicAttributeError:
-    """Issue #992: title_parser crashes on non-episodic resources."""
+    """Issue #992: parser failures must not escape as AttributeError."""
 
-    # Titles that raw_parser cannot parse (returns None)
-    NON_EPISODIC_TITLES = [
-        "[阿特拉斯字幕组·雪原市出差所][命运-奇异赝品_Fate／strange Fake][04_半神们的卡农曲][简繁日内封PGS][日语配音版_Japanese Dub][Web-DL Remux][1080p AVC AAC]",
-        "[KitaujiSub] Shikanoko Nokonoko Koshitantan [01Pre][WebRip][HEVC_AAC][CHS_JP].mp4",
+    # These formats triggered the original crash. The tokenizer now parses
+    # both successfully, so keep an integration-level guard for that behavior.
+    FORMERLY_UNPARSEABLE_TITLES = [
+        (
+            "[阿特拉斯字幕组·雪原市出差所][命运-奇异赝品_Fate／strange Fake][04_半神们的卡农曲][简繁日内封PGS][日语配音版_Japanese Dub][Web-DL Remux][1080p AVC AAC]",
+            "Fate／strange Fake",
+        ),
+        (
+            "[KitaujiSub] Shikanoko Nokonoko Koshitantan [01Pre][WebRip][HEVC_AAC][CHS_JP].mp4",
+            "Shikanoko Nokonoko Koshitantan",
+        ),
     ]
 
-    @pytest.mark.parametrize("title", NON_EPISODIC_TITLES)
-    async def test_title_parser_returns_none_for_non_episodic(self, title):
-        """TitleParser.raw_parser should return None instead of crashing."""
+    @pytest.mark.parametrize("title,expected_title", FORMERLY_UNPARSEABLE_TITLES)
+    async def test_title_parser_handles_nonstandard_titles(self, title, expected_title):
+        """Previously crashing formats now produce a valid parsed model."""
+        from module.parser.title_parser import TitleParser
+
+        result = await TitleParser.raw_parser(title)
+        assert result is not None
+        assert result.title_raw == expected_title
+
+    @pytest.mark.parametrize("title", ["", "[]"])
+    async def test_title_parser_returns_none_for_unparseable(self, title):
+        """A genuine parser miss returns None instead of raising AttributeError."""
         from module.parser.title_parser import TitleParser
 
         result = await TitleParser.raw_parser(title)
         assert result is None
 
-    def test_raw_parser_returns_none_for_unparseable(self):
-        """raw_parser returns None for resources it cannot parse."""
-        result = raw_parser(self.NON_EPISODIC_TITLES[0])
+    @pytest.mark.parametrize("title", ["", "[]"])
+    def test_raw_parser_returns_none_for_unparseable(self, title):
+        """raw_parser still returns None when tokenization yields no content."""
+        result = raw_parser(title)
         assert result is None
 
 
@@ -532,7 +530,7 @@ class TestIssue1005SearchOfficialTitle:
 
         assert hasattr(BangumiDatabase, "search_official_title")
 
-    def test_search_official_title_finds_match(self, db_session):
+    async def test_search_official_title_finds_match(self, db_session):
         """search_official_title returns the matching bangumi."""
         from module.database.bangumi import BangumiDatabase
         from module.models import Bangumi
@@ -544,16 +542,90 @@ class TestIssue1005SearchOfficialTitle:
             season=1,
             rss_link="test",
         )
-        db.add(bangumi)
+        await db.add(bangumi)
 
-        result = db.search_official_title("路人女主的养成方法")
+        result = await db.search_official_title("路人女主的养成方法")
         assert result is not None
         assert result.official_title == "路人女主的养成方法"
 
-    def test_search_official_title_returns_none_when_not_found(self, db_session):
+    async def test_search_official_title_returns_none_when_not_found(self, db_session):
         """search_official_title returns None for non-existent title."""
         from module.database.bangumi import BangumiDatabase
 
         db = BangumiDatabase(db_session)
-        result = db.search_official_title("不存在的番剧")
+        result = await db.search_official_title("不存在的番剧")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1092: 字幕组未标记特别篇等字样时，无集数标题无法解析
+# https://github.com/EstrellaXD/Auto_Bangumi/issues/1092
+#
+# LoliHouse 发布的 TV 特别篇（如 ONE PIECE HEROINES）标题中没有集数也没有
+# 特别篇/剧场版标记。Preview 引擎的准入策略按 eps_collect 整理集接纳这类
+# 带发布证据的单发资源，但 classic 引擎的旧版兼容投影会整条拒绝，导致
+# 默认配置下订阅静默漏抓。
+# ---------------------------------------------------------------------------
+
+
+class TestIssue1092UnmarkedEpisodelessRelease:
+    """Issue #1092: classic admission now matches the Preview policy."""
+
+    REPORTED_TITLE = (
+        "[LoliHouse] 海贼王：女英雄们的故事 / ONE PIECE HEROINES "
+        "[WebRip 1080p HEVC-10bit AAC][简繁内封字幕]"
+    )
+
+    async def test_classic_admits_reported_title_as_collect_bangumi(self):
+        from unittest.mock import patch
+
+        from module.conf import settings
+        from module.models import Bangumi
+        from module.models.config import LLM
+        from module.parser import TitleParser
+
+        with (
+            patch.object(settings, "llm", LLM(enable=False)),
+            patch.object(settings.rss_parser, "engine", "classic"),
+        ):
+            result = await TitleParser.raw_parser(self.REPORTED_TITLE)
+
+        assert isinstance(result, Bangumi)
+        assert result.official_title == "海贼王：女英雄们的故事"
+        assert result.group_name == "LoliHouse"
+        assert result.episode_type == "episode"
+        assert result.eps_collect is True
+
+    async def test_classic_and_preview_agree_on_reported_title(self):
+        from unittest.mock import patch
+
+        from module.conf import settings
+        from module.models import Bangumi
+        from module.models.config import LLM
+        from module.parser import TitleParser
+
+        with (
+            patch.object(settings, "llm", LLM(enable=False)),
+            patch.object(settings.rss_parser, "engine", "tokenizer"),
+        ):
+            preview_result = await TitleParser.raw_parser(self.REPORTED_TITLE)
+
+        assert isinstance(preview_result, Bangumi)
+        assert preview_result.official_title == "海贼王：女英雄们的故事"
+
+    async def test_classic_still_rejects_title_without_release_evidence(self):
+        from unittest.mock import patch
+
+        from module.conf import settings
+        from module.models.config import LLM
+        from module.parser import TitleParser
+
+        with (
+            patch.object(settings, "llm", LLM(enable=False)),
+            patch.object(settings.rss_parser, "engine", "classic"),
+        ):
+            result = await TitleParser.raw_parser(
+                "Random Non Matching Title No Digits At All"
+            )
+
         assert result is None

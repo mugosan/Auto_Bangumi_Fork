@@ -1,23 +1,34 @@
 <script lang="ts" setup>
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { usePointerSwipe } from '@vueuse/core';
 import {
   Dialog,
   DialogPanel,
+  DialogTitle,
   TransitionChild,
   TransitionRoot,
 } from '@headlessui/vue';
+import { Close } from '@icon-park/vue-next';
+import AbIconButton from './ab-icon-button.vue';
 
 const props = withDefaults(
   defineProps<{
     show: boolean;
     title?: string;
     closeable?: boolean;
+    showClose?: boolean;
+    closeLabel?: string;
     maxHeight?: string;
+    fullscreen?: boolean;
+    avoidKeyboard?: boolean;
   }>(),
   {
     closeable: true,
+    showClose: true,
+    closeLabel: 'Close',
     maxHeight: '85dvh',
+    fullscreen: false,
+    avoidKeyboard: true,
   }
 );
 
@@ -31,6 +42,9 @@ const dragHandleRef = ref<HTMLElement | null>(null);
 const translateY = ref(0);
 const isDragging = ref(false);
 const keyboardHeight = ref(0);
+const panelMaxHeight = computed(() =>
+  props.fullscreen ? '100dvh' : props.maxHeight
+);
 
 // Handle iOS Safari virtual keyboard using visualViewport API
 function handleViewportResize() {
@@ -43,17 +57,21 @@ function handleViewportResize() {
 }
 
 // Set up visualViewport listeners when sheet is shown
-watch(() => props.show, (isVisible) => {
-  if (isVisible && window.visualViewport) {
-    window.visualViewport.addEventListener('resize', handleViewportResize);
-    window.visualViewport.addEventListener('scroll', handleViewportResize);
-    handleViewportResize();
-  } else if (window.visualViewport) {
-    window.visualViewport.removeEventListener('resize', handleViewportResize);
-    window.visualViewport.removeEventListener('scroll', handleViewportResize);
-    keyboardHeight.value = 0;
-  }
-}, { immediate: true });
+watch(
+  () => [props.show, props.avoidKeyboard] as const,
+  ([isVisible, shouldAvoidKeyboard]) => {
+    if (isVisible && shouldAvoidKeyboard && window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleViewportResize);
+      window.visualViewport.addEventListener('scroll', handleViewportResize);
+      handleViewportResize();
+    } else if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', handleViewportResize);
+      window.visualViewport.removeEventListener('scroll', handleViewportResize);
+      keyboardHeight.value = 0;
+    }
+  },
+  { immediate: true }
+);
 
 onUnmounted(() => {
   if (window.visualViewport) {
@@ -129,8 +147,10 @@ function close() {
         <div class="ab-bottom-sheet__container">
           <DialogPanel
             ref="sheetRef"
+            data-testid="bottom-sheet-panel"
             class="ab-bottom-sheet__panel"
-            :style="[sheetStyle, { maxHeight }]"
+            :class="{ 'ab-bottom-sheet__panel--fullscreen': fullscreen }"
+            :style="[sheetStyle, { maxHeight: panelMaxHeight }]"
           >
             <!-- Drag handle -->
             <div ref="dragHandleRef" class="ab-bottom-sheet__handle">
@@ -138,13 +158,32 @@ function close() {
             </div>
 
             <!-- Title -->
-            <div v-if="title" class="ab-bottom-sheet__header">
-              <h3 class="ab-bottom-sheet__title">{{ title }}</h3>
+            <div
+              v-if="title || (closeable && showClose)"
+              class="ab-bottom-sheet__header"
+            >
+              <DialogTitle v-if="title" as="h3" class="ab-bottom-sheet__title">
+                {{ title }}
+              </DialogTitle>
+              <AbIconButton
+                v-if="closeable && showClose"
+                class="ab-bottom-sheet__close"
+                size="md"
+                :label="closeLabel"
+                @click="close"
+              >
+                <Close theme="outline" size="16" />
+              </AbIconButton>
             </div>
 
             <!-- Content -->
             <div class="ab-bottom-sheet__content">
               <slot />
+            </div>
+
+            <!-- Footer actions -->
+            <div v-if="$slots.footer" class="ab-bottom-sheet__footer">
+              <slot name="footer" />
             </div>
           </DialogPanel>
         </div>
@@ -157,22 +196,22 @@ function close() {
 .ab-bottom-sheet {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: var(--z-modal);
   display: flex;
   align-items: flex-end;
 
   &__backdrop {
     position: fixed;
     inset: 0;
-    z-index: 100;
-    background: rgba(0, 0, 0, 0.4);
+    z-index: var(--z-modal-backdrop);
+    background: var(--color-overlay);
     backdrop-filter: blur(4px);
   }
 
   &__container {
     position: fixed;
     inset: 0;
-    z-index: 101;
+    z-index: var(--z-modal);
     display: flex;
     align-items: flex-end;
     justify-content: center;
@@ -181,7 +220,6 @@ function close() {
 
   &__panel {
     position: relative;
-    z-index: 102;
     width: 100%;
     max-width: 640px;
     max-height: 85dvh; // Use dynamic viewport height for iOS Safari keyboard support
@@ -197,6 +235,18 @@ function close() {
     // Fallback for browsers that don't support dvh
     @supports not (max-height: 1dvh) {
       max-height: 85vh;
+    }
+
+    &--fullscreen {
+      height: 100dvh;
+      max-height: 100dvh;
+      border-radius: 0;
+      @include safeAreaTop(padding-top);
+
+      @supports not (height: 1dvh) {
+        height: 100vh;
+        max-height: 100vh;
+      }
     }
   }
 
@@ -220,6 +270,10 @@ function close() {
   }
 
   &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
     padding: 0 20px 12px;
     border-bottom: 1px solid var(--color-border);
   }
@@ -229,6 +283,10 @@ function close() {
     font-weight: 600;
     color: var(--color-text);
     margin: 0;
+  }
+
+  &__close {
+    margin-left: auto;
   }
 
   &__content {
@@ -243,6 +301,14 @@ function close() {
     :deep(select) {
       scroll-margin-bottom: 20px;
     }
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--color-border);
   }
 }
 </style>

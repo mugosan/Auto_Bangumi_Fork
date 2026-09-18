@@ -2,6 +2,7 @@
 
 import pytest
 
+from module.downloader import AddResult, RenameOutcome
 from module.downloader.client.mock_downloader import MockDownloader
 
 
@@ -112,7 +113,7 @@ class TestMockDownloaderAddTorrents:
             save_path="/downloads/Bangumi",
             category="Bangumi",
         )
-        assert result is True
+        assert result is AddResult.ADDED
 
     async def test_add_torrent_stores_in_state(self, mock_dl):
         await mock_dl.add_torrents(
@@ -143,7 +144,7 @@ class TestMockDownloaderAddTorrents:
             save_path="/downloads",
             category="Bangumi",
         )
-        assert result is True
+        assert result is AddResult.ADDED
 
     async def test_two_different_torrents_stored_separately(self, mock_dl):
         await mock_dl.add_torrents(
@@ -190,6 +191,12 @@ class TestMockDownloaderTorrentsInfo:
     async def test_empty_store_returns_empty_list(self, mock_dl):
         result = await mock_dl.torrents_info(status_filter=None, category="Bangumi")
         assert result == []
+
+    async def test_torrent_exists_distinguishes_present_and_absent(self, mock_dl):
+        torrent_hash = mock_dl.add_mock_torrent("Anime A", category="Bangumi")
+
+        assert await mock_dl.torrent_exists(torrent_hash) is True
+        assert await mock_dl.torrent_exists("missing") is False
 
 
 class TestMockDownloaderTorrentsFiles:
@@ -256,7 +263,7 @@ class TestMockDownloaderRename:
             old_path="old.mkv",
             new_path="new.mkv",
         )
-        assert result is True
+        assert result.outcome is RenameOutcome.RENAMED
 
     async def test_rename_with_verify_flag(self, mock_dl):
         result = await mock_dl.torrents_rename_file(
@@ -265,7 +272,7 @@ class TestMockDownloaderRename:
             new_path="new.mkv",
             verify=False,
         )
-        assert result is True
+        assert result.outcome is RenameOutcome.RENAMED
 
 
 # ---------------------------------------------------------------------------

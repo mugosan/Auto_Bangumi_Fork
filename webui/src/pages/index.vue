@@ -1,11 +1,37 @@
 <script lang="ts" setup>
+import type { BangumiRule } from '#/bangumi';
+
 definePage({
   name: 'Index',
   redirect: '/bangumi',
 });
 
 const { editRule } = storeToRefs(useBangumiStore());
-const { updateRule, enableRule, archiveRule, unarchiveRule, ruleManage } = useBangumiStore();
+const { updateRule, enableRule, archiveRule, unarchiveRule, ruleManage } =
+  useBangumiStore();
+
+function onEnableRule(id: number) {
+  enableRule(id);
+}
+
+function onArchiveRule(id: number) {
+  archiveRule(id);
+}
+
+function onUnarchiveRule(id: number) {
+  unarchiveRule(id);
+}
+
+function onDeleteFile(
+  type: 'disable' | 'delete',
+  { id, deleteFile }: { id: number; deleteFile: boolean }
+) {
+  ruleManage(type, id, deleteFile);
+}
+
+function onApplyRule(rule: BangumiRule) {
+  updateRule(rule.id, rule);
+}
 </script>
 
 <template>
@@ -22,7 +48,9 @@ const { updateRule, enableRule, archiveRule, unarchiveRule, ruleManage } = useBa
 
         <RouterView v-slot="{ Component }">
           <transition name="page" mode="out-in">
-            <KeepAlive>
+            <!-- max bounds background re-renders: SSE-fed pages (log,
+                 downloader) keep updating while cached -->
+            <KeepAlive :max="3">
               <component :is="Component" />
             </KeepAlive>
           </transition>
@@ -33,11 +61,11 @@ const { updateRule, enableRule, archiveRule, unarchiveRule, ruleManage } = useBa
     <ab-edit-rule
       v-model:show="editRule.show"
       v-model:rule="editRule.item"
-      @enable="(id) => enableRule(id)"
-      @archive="(id) => archiveRule(id)"
-      @unarchive="(id) => unarchiveRule(id)"
-      @delete-file="(type, { id, deleteFile }) => ruleManage(type, id, deleteFile)"
-      @apply="(rule) => updateRule(rule.id, rule)"
+      @enable="onEnableRule"
+      @archive="onArchiveRule"
+      @unarchive="onUnarchiveRule"
+      @delete-file="onDeleteFile"
+      @apply="onApplyRule"
     />
   </div>
 </template>
@@ -72,9 +100,12 @@ const { updateRule, enableRule, archiveRule, unarchiveRule, ruleManage } = useBa
   overflow: hidden;
   flex: 1;
   min-height: 0;
+  // Clear the fixed bottom nav (only rendered <640px)
+  padding-bottom: calc(var(--nav-height) + var(--layout-gap));
 
   @include forTablet {
     flex-direction: row;
+    padding-bottom: 0;
   }
 
   @include forDesktop {

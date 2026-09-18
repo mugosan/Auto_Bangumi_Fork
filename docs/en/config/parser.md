@@ -1,34 +1,25 @@
 # Parser Settings
 
-AB's parser is used to parse aggregated RSS links. When new entries appear in the RSS feed, AB will parse the titles and generate automatic download rules.
+The parser extracts structured metadata such as title, season, episode and subgroup from RSS item titles.
 
 ::: tip
-Since v3.1, parser settings have moved to individual RSS settings. To configure the **parser type**, see [Setting up parser for RSS][add_rss].
+Since v3.1, the source parser for each RSS feed is configured when adding or editing that feed. This page controls the global switch, title parser, language and filters.
 :::
 
-## Parser Settings in WebUI
+## WebUI
 
-![parser](/image/config/parser.png){width=500}{class=ab-shadow-card}
+- **Enable**: enables RSS parsing.
+- **Title parser**: `Classic parser (Stable)` preserves the existing behavior. `Universal parser (Preview)` adds episode ranges, OVAs, movies and mixed collections. The engines never silently fall back to each other.
+- **Language**: preferred parser language. Supported values are `zh`, `jp` and `en`.
+- **Exclude**: global filter rules. Plain strings and regular expressions are supported.
 
-<br/>
+## `config.json`
 
-- **Enable**: Whether to enable the RSS parser.
-- **Language** is the RSS parser language. Currently supports `zh`, `jp`, and `en`.
-- **Exclude** is the global RSS parser filter. You can enter strings or regular expressions, and AB will filter out matching entries during RSS parsing.
+Section: `rss_parser`
 
-## `config.json` Configuration Options
-
-The corresponding options in the configuration file are:
-
-Configuration section: `rss_parser`
-
-| Parameter | Description           | Type    | WebUI Option         | Default        |
-|-----------|-----------------------|---------|---------------------|----------------|
-| enable    | Enable RSS parser     | Boolean | Enable RSS parser   | true           |
-| filter    | RSS parser filter     | Array   | Filter              | [720,\d+-\d+] |
-| language  | RSS parser language   | String  | RSS parser language | zh             |
-
-
-[rss_token]: rss
-[add_rss]: /feature/rss#parser-settings
-[reproxy]: proxy#reverse-proxy
+| Key | Description | Type | WebUI field | Default |
+| --- | --- | --- | --- | --- |
+| `enable` | Enable RSS parser | boolean | Enable | `true` |
+| `engine` | Title parser: `classic` or `tokenizer` | string | Title parser | `classic` |
+| `filter` | Global filters | string array | Exclude | `["720", "\\d+-\\d+"]` |
+| `language` | Parser language | string | Language | `zh` |

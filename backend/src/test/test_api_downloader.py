@@ -1,14 +1,14 @@
 """Tests for Downloader API endpoints."""
 
-import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from module.api import v1
+from module.models import RenameOperation
 from module.security.api import get_current_user
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -78,6 +78,76 @@ class TestAuthRequired:
         response = unauthed_client.get("/api/v1/downloader/torrents")
         assert response.status_code == 401
 
+
+class TestRenameConflicts:
+    def test_list_conflicts(self, authed_client):
+        row = RenameOperation(
+            id=7,
+            downloader_type="qbittorrent",
+            kind="conflict",
+            state="conflict",
+            new_task_id="new-v2",
+            save_path="/downloads/Show/Season 1",
+            source_path="raw-v2.mkv",
+            target_path="Show S01E01.mkv",
+            last_error="target exists",
+        )
+        with patch("module.api.downloader.Database") as mock_database:
+            db = MagicMock()
+            db.rename_operation.list_conflicts = AsyncMock(return_value=[row])
+            mock_database.return_value.__aenter__ = AsyncMock(return_value=db)
+            mock_database.return_value.__aexit__ = AsyncMock(return_value=False)
+            response = authed_client.get("/api/v1/downloader/rename-conflicts")
+
+        assert response.status_code == 200
+        assert response.json()[0]["id"] == 7
+        assert response.json()[0]["state"] == "conflict"
+
+    def test_retry_deletes_terminal_conflict(self, authed_client):
+        row = RenameOperation(
+            id=7,
+            downloader_type="qbittorrent",
+            kind="conflict",
+            state="conflict",
+            new_task_id="new-v2",
+            save_path="/downloads/Show/Season 1",
+            source_path="raw-v2.mkv",
+            target_path="Show S01E01.mkv",
+        )
+        with patch("module.api.downloader.Database") as mock_database:
+            db = MagicMock()
+            db.rename_operation.get = AsyncMock(return_value=row)
+            db.rename_operation.delete = AsyncMock(return_value=True)
+            mock_database.return_value.__aenter__ = AsyncMock(return_value=db)
+            mock_database.return_value.__aexit__ = AsyncMock(return_value=False)
+            response = authed_client.post("/api/v1/downloader/rename-conflicts/7/retry")
+
+        assert response.status_code == 200
+        db.rename_operation.delete.assert_awaited_once_with(7)
+
+    def test_retry_rejects_active_replacement(self, authed_client):
+        row = RenameOperation(
+            id=7,
+            downloader_type="qbittorrent",
+            kind="replacement",
+            state="new_promoted",
+            new_task_id="new-v2",
+            old_task_id="old-v1",
+            save_path="/downloads/Show/Season 1",
+            source_path="raw-v2.mkv",
+            target_path="Show S01E01.mkv",
+        )
+        with patch("module.api.downloader.Database") as mock_database:
+            db = MagicMock()
+            db.rename_operation.get = AsyncMock(return_value=row)
+            mock_database.return_value.__aenter__ = AsyncMock(return_value=db)
+            mock_database.return_value.__aexit__ = AsyncMock(return_value=False)
+            response = authed_client.post("/api/v1/downloader/rename-conflicts/7/retry")
+
+        assert response.status_code == 409
+
+
+class TestOtherAuthRequired:
     @patch("module.security.api.DEV_AUTH_BYPASS", False)
     def test_pause_torrents_unauthorized(self, unauthed_client):
         """POST /downloader/torrents/pause without auth returns 401."""
@@ -314,8 +384,10 @@ class TestTagTorrent:
             MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with patch("module.api.downloader.Database") as MockDB:
-                mock_db = MockDB.return_value.__enter__.return_value
-                mock_db.bangumi.search_id.return_value = mock_bangumi
+                mock_db = MagicMock()
+                mock_db.bangumi.search_id = AsyncMock(return_value=mock_bangumi)
+                MockDB.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+                MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
                 response = authed_client.post(
                     "/api/v1/downloader/torrents/tag",
@@ -331,8 +403,10 @@ class TestTagTorrent:
     def test_tag_torrent_bangumi_not_found(self, authed_client, mock_download_client):
         """POST /downloader/torrents/tag fails if bangumi doesn't exist."""
         with patch("module.api.downloader.Database") as MockDB:
-            mock_db = MockDB.return_value.__enter__.return_value
-            mock_db.bangumi.search_id.return_value = None
+            mock_db = MagicMock()
+            mock_db.bangumi.search_id = AsyncMock(return_value=None)
+            MockDB.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
             response = authed_client.post(
                 "/api/v1/downloader/torrents/tag",
@@ -366,7 +440,8 @@ class TestAutoTagTorrents:
             deleted=False,
         )
 
-        # Mock torrents - one untagged, one already tagged
+        # Mock torrents - one untagged, one already tagged, one only carrying
+        # the ab:renamed completion marker (must NOT count as linked)
         mock_download_client.get_torrent_info.return_value = [
             {
                 "hash": "abc123",
@@ -380,6 +455,12 @@ class TestAutoTagTorrents:
                 "save_path": "/downloads/Other Anime/Season 1",
                 "tags": "ab:456",  # Already tagged
             },
+            {
+                "hash": "ghi789",
+                "name": "[TestGroup] Test Anime - 02.mkv",
+                "save_path": "/downloads/Test Anime/Season 1",
+                "tags": "ab:renamed",  # 处理完成标记 ≠ 已关联番剧
+            },
         ]
 
         with patch("module.api.downloader.DownloadClient") as MockClient:
@@ -389,18 +470,23 @@ class TestAutoTagTorrents:
             MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with patch("module.api.downloader.Database") as MockDB:
-                mock_db = MockDB.return_value.__enter__.return_value
-                mock_db.bangumi.match_torrent.return_value = mock_bangumi
-                mock_db.bangumi.match_by_save_path.return_value = None
+                mock_db = MagicMock()
+                mock_db.bangumi.search_all = AsyncMock(return_value=[mock_bangumi])
+                MockDB.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+                MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
                 response = authed_client.post("/api/v1/downloader/torrents/tag/auto")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] is True
-        assert data["tagged_count"] == 1
-        # Only the untagged torrent should be tagged
-        mock_download_client.add_tag.assert_called_once_with("abc123", "ab:123")
+        assert data["tagged_count"] == 2
+        # The untagged torrent and the ab:renamed-only torrent get linked;
+        # the ab:456 one is skipped
+        assert mock_download_client.add_tag.call_args_list == [
+            (("abc123", "ab:123"),),
+            (("ghi789", "ab:123"),),
+        ]
 
     def test_auto_tag_no_matches(self, authed_client, mock_download_client):
         """POST /downloader/torrents/tag/auto handles unmatched torrents."""
@@ -420,9 +506,10 @@ class TestAutoTagTorrents:
             MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with patch("module.api.downloader.Database") as MockDB:
-                mock_db = MockDB.return_value.__enter__.return_value
-                mock_db.bangumi.match_torrent.return_value = None
-                mock_db.bangumi.match_by_save_path.return_value = None
+                mock_db = MagicMock()
+                mock_db.bangumi.search_all = AsyncMock(return_value=[])
+                MockDB.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+                MockDB.return_value.__aexit__ = AsyncMock(return_value=False)
 
                 response = authed_client.post("/api/v1/downloader/torrents/tag/auto")
 
