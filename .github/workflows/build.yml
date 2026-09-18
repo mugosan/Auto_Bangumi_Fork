@@ -174,83 +174,16 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Docker metadata main
-        if: ${{ needs.version-info.outputs.release == 1 && needs.version-info.outputs.dev != 1 }}
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            estrellaxd/auto_bangumi
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=${{ needs.version-info.outputs.version }}
-            type=raw,value=latest
-
-      - name: Docker metadata dev
-        if: ${{ needs.version-info.outputs.dev == 1 }}
-        id: meta-dev
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            estrellaxd/auto_bangumi
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=${{ needs.version-info.outputs.version }}
-            type=raw,value=dev-latest
-
-      - name: Login to DockerHub
-        if: ${{ needs.version-info.outputs.release == 1 }}
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-
-      - name: Login to ghcr.io
-        if: ${{ needs.version-info.outputs.release == 1 }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ACCESS_TOKEN }}
-
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: backend/src/dist
 
-      - name: Build and push
-        if: ${{ needs.version-info.outputs.release == 1 && needs.version-info.outputs.dev != 1 }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          builder: ${{ steps.buildx.outputs.name }}
-          platforms: linux/amd64,linux/arm64
-          push: True
-          build-args: |
-            VERSION=${{ needs.version-info.outputs.version }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ github.workflow }}
-          cache-to: type=gha,scope=${{ github.workflow }},ignore-error=true
-
-      - name: Build and push dev
-        if: ${{ needs.version-info.outputs.dev == 1 }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          builder: ${{ steps.buildx.outputs.name }}
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' }}
-          build-args: |
-            VERSION=${{ needs.version-info.outputs.version }}
-          tags: ${{ steps.meta-dev.outputs.tags }}
-          labels: ${{ steps.meta-dev.outputs.labels }}
-          cache-from: type=gha,scope=${{ github.workflow }}
-          cache-to: type=gha,scope=${{ github.workflow }},ignore-error=true
-
-      - name: Build test
-        if: ${{ needs.version-info.outputs.release == 0 }}
+      # This fork has no DockerHub credentials and doesn't publish images --
+      # validate the Dockerfile still builds (both platforms) without pushing
+      # anywhere, regardless of release/dev/build_test.
+      - name: Build test (no push -- this fork doesn't publish Docker images)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -259,7 +192,6 @@ jobs:
           push: false
           build-args: |
             VERSION=${{ needs.version-info.outputs.version }}
-          tags: estrellaxd/auto_bangumi:test
           cache-from: type=gha,scope=${{ github.workflow }}
           cache-to: type=gha,scope=${{ github.workflow }},ignore-error=true
 
@@ -309,54 +241,11 @@ jobs:
           cd backend && zip -r app-v${{ needs.version-info.outputs.version }}.zip \
             src pyproject.toml uv.lock requirements.txt
 
-      # 在线自动更新 bundle：module 源码树 + pyproject/uv.lock + 前端 dist + manifest。
-      # 同时产出 .sha256（客户端下载后据此校验完整性）。min_image_version 是能应用
-      # 此 bundle 布局的最低镜像版本（引入在线更新的首个版本）。
-      - name: Build update bundle
-        run: |
-          VERSION="${{ needs.version-info.outputs.version }}"
-          MIN_IMAGE_VERSION="3.3.0-beta.1"
-          STAGE="bundle_stage"
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE/backend/src" "$STAGE/webui-dist"
-          cp -r backend/src/module "$STAGE/backend/src/module"
-          cp backend/pyproject.toml backend/uv.lock "$STAGE/backend/"
-          cp -r webui/dist/. "$STAGE/webui-dist/"
-          LOCK_SHA=$(sha256sum backend/uv.lock | awk '{print $1}')
-          cat > "$STAGE/manifest.json" <<EOF
-          {
-            "version": "$VERSION",
-            "min_image_version": "$MIN_IMAGE_VERSION",
-            "lockfile_sha256": "$LOCK_SHA",
-            "notes": "See release notes."
-          }
-          EOF
-          ( cd "$STAGE" && zip -r "../update-bundle-${VERSION}.zip" backend webui-dist manifest.json )
-          sha256sum "update-bundle-${VERSION}.zip" | awk '{print $1}' > "update-bundle-${VERSION}.zip.sha256"
-
-      # 对 bundle 做 ed25519 签名（私钥在 UPDATE_SIGNING_KEY secret，公钥随镜像
-      # 分发）。客户端 apply 前验签，boot_overlay 每次启动重新验签——没有 .sig
-      # 的 release 会被更新器拒绝，所以签名失败必须让构建失败。
-      - name: Sign update bundle
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          if [ -z "$UPDATE_SIGNING_KEY" ]; then
-            echo "::error::UPDATE_SIGNING_KEY secret is not set; unsigned bundles are rejected by the updater" >&2
-            exit 1
-          fi
-          VERSION="${{ needs.version-info.outputs.version }}"
-          uv run --no-project --with cryptography python - "update-bundle-${VERSION}.zip" <<'PY'
-          import base64, os, sys
-          from pathlib import Path
-          from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-          bundle = Path(sys.argv[1])
-          key = load_pem_private_key(os.environ["UPDATE_SIGNING_KEY"].encode(), password=None)
-          sig = key.sign(bundle.read_bytes())
-          Path(str(bundle) + ".sig").write_text(base64.b64encode(sig).decode() + "\n")
-          print(f"signed {bundle}")
-          PY
+      # This fork doesn't have an UPDATE_SIGNING_KEY (upstream's own key for
+      # their online auto-update feature) -- skip building/signing the bundle
+      # entirely rather than hard-failing the release job. The Dockerfile's
+      # boot_overlay only applies a bundle if one is present, so omitting it
+      # just means this fork's installs update the normal way (new image/zip).
 
       - name: Generate Release info
         id: release-info
@@ -393,21 +282,23 @@ jobs:
           files: |
             webui/dist.zip
             backend/app-v${{ needs.version-info.outputs.version }}.zip
-            update-bundle-${{ needs.version-info.outputs.version }}.zip
-            update-bundle-${{ needs.version-info.outputs.version }}.zip.sha256
-            update-bundle-${{ needs.version-info.outputs.version }}.zip.sig
         env:
-          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          # The repo-scoped token GitHub provides automatically -- no secret
+          # to configure. Needs Settings > Actions > General > Workflow
+          # permissions > "Read and write permissions" for release creation.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  telegram:
-    runs-on: ubuntu-latest
-    needs: [release]
-    steps:
-      - name: send telegram message on push
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_TO }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
-          message: |
-            New release: ${{ needs.release.outputs.version }}
-            Link: ${{ needs.release.outputs.url }}
+  # Disabled: this fork has no TELEGRAM_TO/TELEGRAM_TOKEN configured. Re-enable
+  # if you set up a bot for release notifications.
+  # telegram:
+  #   runs-on: ubuntu-latest
+  #   needs: [release]
+  #   steps:
+  #     - name: send telegram message on push
+  #       uses: appleboy/telegram-action@master
+  #       with:
+  #         to: ${{ secrets.TELEGRAM_TO }}
+  #         token: ${{ secrets.TELEGRAM_TOKEN }}
+  #         message: |
+  #           New release: ${{ needs.release.outputs.version }}
+  #           Link: ${{ needs.release.outputs.url }}
