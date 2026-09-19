@@ -211,6 +211,32 @@
       "delete_confirm": "Remove the selected torrents from the downloader? Downloaded files are kept."
     }
   },
+  "manual_import": {
+    "open_button": "Import a torrent",
+    "title": "Import a torrent",
+    "pick_hint": "Torrents added directly in your downloader (not through a subscription or Search/Collect) can be organized into your library here.",
+    "no_candidates": "No unmanaged torrents found.",
+    "torrent_name": "Torrent",
+    "size": "Size",
+    "state": "State",
+    "select": "Select",
+    "show_name": "Show name",
+    "season": "Season",
+    "destination": "Destination",
+    "source": "Source file",
+    "target": "New name",
+    "result": "Result",
+    "result_ok": "Moved",
+    "result_failed": "Failed",
+    "unparsed_warning": "{0} file(s) could not be matched to an episode and will not be moved:",
+    "preview_button": "Preview",
+    "apply_button": "Move & Rename",
+    "done": "Done",
+    "load_failed": "Could not load torrents from your downloader.",
+    "title_required": "Enter the show's name first.",
+    "preview_failed": "Could not build a preview for this torrent.",
+    "apply_failed": "Could not move/rename this torrent's files."
+  },
   "homepage": {
     "load_failed": {
       "title": "Could not load your subscriptions",

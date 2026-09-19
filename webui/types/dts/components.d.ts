@@ -25,6 +25,7 @@ declare module '@vue/runtime-core' {
     AbIconButton: typeof import('./../../src/components/basic/ab-icon-button.vue')['default']
     AbInput: typeof import('./../../src/components/basic/ab-input.vue')['default']
     AbList: typeof import('./../../src/components/basic/ab-list.vue')['default']
+    AbManualImportModal: typeof import('./../../src/components/ab-manual-import-modal.vue')['default']
     AbMenu: typeof import('./../../src/components/basic/ab-menu.vue')['default']
     AbMobileNav: typeof import('./../../src/components/layout/ab-mobile-nav.vue')['default']
     AbModal: typeof import('./../../src/components/basic/ab-modal.vue')['default']

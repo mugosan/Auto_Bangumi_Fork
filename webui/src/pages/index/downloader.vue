@@ -21,6 +21,8 @@ const {
   toggleGroup,
   clearSelection,
 } = useDownloaderStore();
+
+const showManualImport = ref(false);
 const { confirm } = useConfirm();
 
 async function onDeleteSelected() {
@@ -277,6 +279,12 @@ function groupCheckedKeys(group: TorrentGroup): string[] {
     </div>
 
     <div v-else class="downloader-content">
+      <div class="downloader-toolbar">
+        <ab-button variant="secondary" size="sm" @click="showManualImport = true">
+          {{ $t('manual_import.open_button') }}
+        </ab-button>
+      </div>
+
       <div v-if="groups.length === 0 && !loading" class="downloader-empty">
         {{ $t('downloader.empty_torrents') }}
       </div>
@@ -320,6 +328,8 @@ function groupCheckedKeys(group: TorrentGroup): string[] {
         </div>
       </Transition>
     </div>
+
+    <ab-manual-import-modal v-model:show="showManualImport" />
   </div>
 </template>
 
@@ -337,6 +347,11 @@ function groupCheckedKeys(group: TorrentGroup): string[] {
   flex: 1;
   gap: 12px;
   padding-bottom: 60px;
+}
+
+.downloader-toolbar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .downloader-groups {

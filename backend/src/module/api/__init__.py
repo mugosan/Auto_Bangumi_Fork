@@ -7,6 +7,7 @@ from .downloader import router as downloader_router
 from .events import router as events_router
 from .llm import router as llm_router
 from .log import router as log_router
+from .manual_import import router as manual_import_router
 from .movie import router as movie_router
 from .notification import router as notification_router
 from .passkey import router as passkey_router
@@ -39,3 +40,4 @@ v1.include_router(setup_router)
 v1.include_router(notification_router)
 v1.include_router(update_router)
 v1.include_router(llm_router)
+v1.include_router(manual_import_router)

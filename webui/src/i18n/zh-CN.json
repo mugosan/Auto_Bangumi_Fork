@@ -211,6 +211,32 @@
       "delete_confirm": "从下载器中移除所选种子？已下载的文件将保留。"
     }
   },
+  "manual_import": {
+    "open_button": "导入种子",
+    "title": "导入种子",
+    "pick_hint": "直接在下载器中添加的种子（不是通过订阅或搜索/合集添加的），可以在这里整理进你的媒体库。",
+    "no_candidates": "没有找到未托管的种子。",
+    "torrent_name": "种子",
+    "size": "大小",
+    "state": "状态",
+    "select": "选择",
+    "show_name": "番剧名称",
+    "season": "季度",
+    "destination": "目标路径",
+    "source": "原文件",
+    "target": "新文件名",
+    "result": "结果",
+    "result_ok": "已移动",
+    "result_failed": "失败",
+    "unparsed_warning": "{0} 个文件无法匹配到集数，不会被移动：",
+    "preview_button": "预览",
+    "apply_button": "移动并重命名",
+    "done": "完成",
+    "load_failed": "无法从下载器获取种子列表。",
+    "title_required": "请先输入番剧名称。",
+    "preview_failed": "无法为该种子生成预览。",
+    "apply_failed": "无法移动/重命名该种子的文件。"
+  },
   "homepage": {
     "load_failed": {
       "title": "订阅列表加载失败",
