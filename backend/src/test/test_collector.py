@@ -201,3 +201,105 @@ class TestSubscribeSeason:
             assert len(stored) == 2
             assert all(t.bangumi_id == data.id for t in stored)
             assert await db.torrent.count_orphans() == 0
+
+
+class TestSubscribeSeasonTmdbResolution:
+    """Regression tests: subscribing directly from a Search result (parser=
+    "tmdb") previously saved a bangumi with no year/tvdb_id/id_source
+    forever, because searcher.py builds search results with
+    fetch_poster=False (skipping the entire TMDB/TVDB branch in
+    official_title_parser for listing responsiveness) and subscribe_season
+    persisted whatever it was given with no re-parsing. Confirmed by the
+    user: Search -> pick -> Subscribe never invoked the parser, while
+    Add RSS -> Analyze -> Subscribe (which does call the full parser before
+    subscribe_season ever sees the data) worked fine.
+    """
+
+    async def test_search_sourced_subscribe_resolves_before_saving(self):
+        """tvdb_id=None (never resolved, as a search result would be) must
+        get a full TMDB/TVDB resolution before the row is persisted."""
+        data = make_bangumi(
+            filter="", year=None, tvdb_id=None, official_title="Test Anime"
+        )
+        downloader_client = AsyncMock()
+        downloader_client.add_torrent = AsyncMock(return_value=AddResult.ADDED)
+        tmdb_result = ("Resolved Title", 2, "2019", "poster.jpg", 359274, "tvdb")
+        with (
+            patch(
+                "module.rss.engine.RequestContent",
+                return_value=_req_with_torrents(_make_torrents()),
+            ),
+            patch(
+                "module.rss.engine.DownloadClient",
+                return_value=_async_ctx(downloader_client),
+            ),
+            patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ) as mock_tmdb,
+        ):
+            await SeasonCollector.subscribe_season(data, parser="tmdb")
+
+        mock_tmdb.assert_awaited_once()
+        assert data.official_title == "Resolved Title"
+        assert data.year == "2019"
+        assert data.season == 2
+        assert data.tvdb_id == 359274
+        assert data.id_source == "tvdb"
+        async with Database() as db:
+            row = await db.bangumi.search_id(data.id)
+            assert row is not None
+            assert row.year == "2019"
+            assert row.tvdb_id == 359274
+            assert row.id_source == "tvdb"
+
+    async def test_already_resolved_subscribe_is_not_re_resolved(self):
+        """A bangumi that already went through full resolution (e.g. via the
+        Add-RSS analysis flow, which calls the parser before subscribe_season
+        ever sees the data) must not be re-fetched -- tvdb_id already being
+        set is the signal that it was."""
+        data = make_bangumi(filter="", year="2019", tvdb_id=359274, id_source="tvdb")
+        downloader_client = AsyncMock()
+        downloader_client.add_torrent = AsyncMock(return_value=AddResult.ADDED)
+        with (
+            patch(
+                "module.rss.engine.RequestContent",
+                return_value=_req_with_torrents(_make_torrents()),
+            ),
+            patch(
+                "module.rss.engine.DownloadClient",
+                return_value=_async_ctx(downloader_client),
+            ),
+            patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(),
+            ) as mock_tmdb,
+        ):
+            await SeasonCollector.subscribe_season(data, parser="tmdb")
+
+        mock_tmdb.assert_not_awaited()
+
+    async def test_mikan_parser_subscribe_is_never_resolved_via_tmdb(self):
+        """parser="mikan" must never trigger a TMDB/TVDB lookup, resolved or
+        not -- mikan gets its title/poster from the Mikan homepage scrape,
+        by design, same as the automated RSS flow."""
+        data = make_bangumi(filter="", year=None, tvdb_id=None)
+        downloader_client = AsyncMock()
+        downloader_client.add_torrent = AsyncMock(return_value=AddResult.ADDED)
+        with (
+            patch(
+                "module.rss.engine.RequestContent",
+                return_value=_req_with_torrents(_make_torrents()),
+            ),
+            patch(
+                "module.rss.engine.DownloadClient",
+                return_value=_async_ctx(downloader_client),
+            ),
+            patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(),
+            ) as mock_tmdb,
+        ):
+            await SeasonCollector.subscribe_season(data, parser="mikan")
+
+        mock_tmdb.assert_not_awaited()

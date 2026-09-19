@@ -1,9 +1,11 @@
 import logging
 
+from module.conf import settings
 from module.database import Database
 from module.downloader import AddResult, DownloadClient
 from module.models import Bangumi, ResponseModel
 from module.network import RequestContent
+from module.parser import TitleParser
 from module.rss import RSSEngine
 from module.searcher import SearchTorrent
 
@@ -104,6 +106,38 @@ class SeasonCollector:
 
     @staticmethod
     async def subscribe_season(data: Bangumi, parser: str = "mikan"):
+        # Search results are built with fetch_poster=False for listing
+        # responsiveness (searcher.py/analyse_keyword), which skips the
+        # entire TMDB/TVDB resolution branch in official_title_parser --
+        # only official_title/poster_link get a lightweight patch
+        # afterward. subscribe_season persists `data` as given with no
+        # re-parsing, so a search-sourced subscribe would otherwise save
+        # a bangumi with no year/tvdb_id/id_source forever. Resolve it
+        # here, once, before it's ever written -- harmless no-op for a
+        # bangumi that already resolved (e.g. via the Add-RSS analysis
+        # flow, which does call the full parser).
+        if parser == "tmdb" and data.tvdb_id is None:
+            (
+                official_title,
+                season,
+                year,
+                poster_link,
+                meta_id,
+                id_source,
+            ) = await TitleParser.tmdb_parser(
+                data.official_title,
+                data.season,
+                settings.rss_parser.language,
+                episode_type=data.episode_type,
+            )
+            data.official_title = official_title
+            data.season = season
+            data.year = year
+            if poster_link:
+                data.poster_link = poster_link
+            data.tvdb_id = meta_id
+            data.id_source = id_source
+
         async with Database() as db:
             engine = RSSEngine(db)
             data.added = True
