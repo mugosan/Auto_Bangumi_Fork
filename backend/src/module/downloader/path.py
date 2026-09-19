@@ -26,6 +26,13 @@ _SUBTITLE_SUFFIXES = frozenset({".ass", ".srt"})
 # 目录或直接丢字（qB 静默截断），必须在拼路径前替换掉 (#721)
 _ILLEGAL_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+# _media_folder() appends "[tvdb-N]"/"[tmdb-N]" to the season folder name
+# for Plex/HAMA matching. That's only meant to decorate the folder --
+# path_to_bangumi() reverse-derives bangumi_name from the folder to feed
+# "advance" rename mode's filename template, and must strip it back off or
+# every episode filename ends up with the id tag baked in verbatim (#1042).
+_ID_TAG_SUFFIX_RE = re.compile(r"\s*\[(?:tvdb|tmdb)-\d+\]$")
+
 
 def sanitize_path_fragment(name: str) -> str:
     """把单个路径片段（文件夹名或文件名，不含分隔符）里的保留字符替换为空格。
@@ -65,6 +72,7 @@ def path_to_bangumi(save_path: PathLike[str] | str, torrent_name: str = ""):
             season = int(re.findall(r"\d+", part)[0])
         elif part not in download_parts:
             bangumi_name = part
+    bangumi_name = _ID_TAG_SUFFIX_RE.sub("", bangumi_name)
     if not bangumi_name:
         bangumi_name = torrent_name
     return bangumi_name, season

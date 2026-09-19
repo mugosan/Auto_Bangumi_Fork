@@ -335,6 +335,30 @@ class TestPathToBangumi:
 
         assert season == 3
 
+    def test_strips_tvdb_id_tag_from_folder_name(self):
+        """Regression for #1042: _media_folder() appends "[tvdb-N]"/"[tmdb-N]"
+        to the folder for Plex/HAMA matching. "advance" rename mode feeds
+        this name straight into every episode's filename, so the tag must
+        not leak into bangumi_name or it ends up baked into every file."""
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            name, season = path_to_bangumi(
+                "/downloads/Bangumi/My Anime (2024) [tvdb-457532]/Season 2"
+            )
+
+        assert name == "My Anime (2024)"
+        assert season == 2
+
+    def test_strips_tmdb_id_tag_from_folder_name(self):
+        """Same as above for the tmdb-id fallback tag (no tvdb match)."""
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            name, season = path_to_bangumi(
+                "/downloads/Bangumi/My Anime (2024) [tmdb-12345]/Season 1"
+            )
+
+        assert name == "My Anime (2024)"
+
 
 # ---------------------------------------------------------------------------
 # is_ep / file_depth
