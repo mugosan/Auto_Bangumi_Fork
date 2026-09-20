@@ -33,3 +33,22 @@ export interface ImportApplyResult {
   succeeded: boolean;
   detail: string | null;
 }
+
+export interface FolderFileMapping {
+  source_path: string;
+  target_path: string;
+  episode: number | null;
+  parsed: boolean;
+  kind: 'media' | 'subtitle';
+}
+
+export interface FolderImportPreview {
+  source_root: string;
+  official_title: string;
+  year: string | null;
+  tvdb_id: number | null;
+  id_source: string | null;
+  target_folder: string;
+  mappings: FolderFileMapping[];
+  unparsed: string[];
+}

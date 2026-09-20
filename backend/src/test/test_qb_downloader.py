@@ -850,11 +850,11 @@ class TestAddTorrents:
         info_start = raw.index(b"4:info") + len(b"4:info")
         expected = hashlib.sha1(raw[info_start:-1]).hexdigest()
 
-        from module.downloader.client.qb_downloader import _torrent_infohash
+        from module.downloader.base import torrent_infohash
 
-        assert _torrent_infohash(raw) == expected
-        assert _torrent_infohash(b"not a torrent") is None
-        assert _torrent_infohash(b"d4:infoi3e") is None  # truncated/no dict end
+        assert torrent_infohash(raw) == expected
+        assert torrent_infohash(b"not a torrent") is None
+        assert torrent_infohash(b"d4:infoi3e") is None  # truncated/no dict end
 
     async def test_add_fails_body_without_confirmed_duplicate_raises(self):
         # "Fails." 也可能是种子损坏/无法解析——无法确认重复时必须按失败抛出，

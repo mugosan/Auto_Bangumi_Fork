@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -13,52 +12,12 @@ from module.downloader.base import (
     DownloaderCapabilities,
     RenameOutcome,
     RenameResult,
+    torrent_infohash,
 )
 
 logger = logging.getLogger(__name__)
 
 _MAGNET_BTIH_RE = re.compile(r"xt=urn:btih:([0-9A-Fa-f]{40}|[A-Za-z2-7]{32})")
-
-
-def _torrent_infohash(data: bytes) -> str | None:
-    """从 .torrent 字节中提取 v1 infohash（bencoded ``info`` 字典的 SHA-1）。
-
-    qB ≤5.1 对重复上传只回笼统的 "Fails."——要确认"其实已存在"就得拿文件
-    自己算 hash 去查。手写极简 bencode 游标（只需定位 info 值的字节区间，
-    不需要完整解码），损坏/非 bencode 输入返回 None。
-    """
-
-    def _skip(i: int) -> int:
-        """返回从 i 开始的 bencode 元素的结束下标（exclusive）。"""
-        c = data[i : i + 1]
-        if c == b"i":
-            return data.index(b"e", i) + 1
-        if c in (b"l", b"d"):
-            i += 1
-            while data[i : i + 1] != b"e":
-                i = _skip(i)
-            return i + 1
-        colon = data.index(b":", i)
-        return colon + 1 + int(data[i:colon])
-
-    try:
-        if data[:1] != b"d":
-            return None
-        i = 1
-        while data[i : i + 1] != b"e":
-            colon = data.index(b":", i)
-            key_len = int(data[i:colon])
-            key = data[colon + 1 : colon + 1 + key_len]
-            i = colon + 1 + key_len
-            end = _skip(i)
-            if key == b"info":
-                if data[i : i + 1] != b"d":
-                    return None
-                return hashlib.sha1(data[i:end]).hexdigest()
-            i = end
-        return None
-    except (ValueError, IndexError):
-        return None
 
 
 class QbDownloader:
@@ -384,7 +343,7 @@ class QbDownloader:
         )
         hashes: list[str] = []
         for f in file_list:
-            infohash = _torrent_infohash(f)
+            infohash = torrent_infohash(f)
             if infohash is None:
                 return False
             hashes.append(infohash)

@@ -7,7 +7,13 @@ from module.conf import settings
 from module.models import Bangumi, Torrent
 from module.network import RequestContent
 
-from .base import AddResult, DownloaderClient, RenameOutcome, RenameResult
+from .base import (
+    AddResult,
+    DownloaderClient,
+    RenameOutcome,
+    RenameResult,
+    torrent_infohash,
+)
 from .path import gen_save_path
 
 logger = logging.getLogger(__name__)
@@ -440,6 +446,32 @@ class DownloadClient:
         except Exception as e:
             logger.error(f"Failed to add torrent for {bangumi.official_title}: {e}")
             return AddResult.FAILED
+
+    async def add_torrent_file(self, data: bytes) -> tuple[AddResult, str | None]:
+        """Add a raw .torrent file with no bangumi association yet -- for the
+        manual-import "upload a .torrent" entry point, where the show/season
+        aren't known until after the file is picked. Added untagged (same as
+        adding it directly through the downloader's own UI) to the download
+        root, so it shows up as an unmanaged import candidate afterward.
+
+        Returns the computed info-hash alongside the result so the caller can
+        look the torrent back up without listing everything and diffing.
+        """
+        info_hash = torrent_infohash(data)
+        if info_hash is None:
+            logger.warning("Uploaded file is not a valid .torrent (bad bencode)")
+            return AddResult.FAILED, None
+        try:
+            result = await self.client.add_torrents(
+                torrent_urls=None,
+                torrent_files=data,
+                save_path=settings.downloader.path,
+                category="",
+            )
+            return result, info_hash
+        except Exception as e:
+            logger.error(f"Failed to add uploaded torrent file: {e}")
+            return AddResult.FAILED, None
 
     async def move_torrent(self, hashes, location):
         if not self._supports("can_manage", "move_torrent"):

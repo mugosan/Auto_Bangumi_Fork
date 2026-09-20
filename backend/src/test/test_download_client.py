@@ -393,6 +393,46 @@ class TestClientDelegation:
 # ---------------------------------------------------------------------------
 
 
+_VALID_TORRENT_BYTES = (
+    b"d8:announce31:http://tracker.example/announce"
+    b"4:infod6:lengthi1e4:name3:foo12:piece lengthi16384e6:pieces20:"
+    + b"\x01" * 20
+    + b"ee"
+)
+
+
+class TestAddTorrentFile:
+    async def test_valid_torrent_is_added_to_download_root(
+        self, download_client, mock_qb_client
+    ):
+        result, info_hash = await download_client.add_torrent_file(_VALID_TORRENT_BYTES)
+
+        assert result is AddResult.ADDED
+        assert info_hash is not None
+        call_kwargs = mock_qb_client.add_torrents.call_args[1]
+        assert call_kwargs["torrent_urls"] is None
+        assert call_kwargs["torrent_files"] == _VALID_TORRENT_BYTES
+        assert call_kwargs["save_path"] == "/downloads/Bangumi"
+        assert call_kwargs["category"] == ""
+
+    async def test_invalid_bencode_fails_without_calling_downloader(
+        self, download_client, mock_qb_client
+    ):
+        result, info_hash = await download_client.add_torrent_file(b"not a torrent")
+
+        assert result is AddResult.FAILED
+        assert info_hash is None
+        mock_qb_client.add_torrents.assert_not_awaited()
+
+    async def test_downloader_error_is_caught(self, download_client, mock_qb_client):
+        mock_qb_client.add_torrents.side_effect = RuntimeError("boom")
+
+        result, info_hash = await download_client.add_torrent_file(_VALID_TORRENT_BYTES)
+
+        assert result is AddResult.FAILED
+        assert info_hash is None
+
+
 class TestAddTag:
     async def test_add_tag_delegates_to_client(self, download_client, mock_qb_client):
         """add_tag delegates to client.add_tag."""

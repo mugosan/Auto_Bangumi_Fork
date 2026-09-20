@@ -1,7 +1,14 @@
 <script lang="ts" setup>
 import { type DataTableColumns, NDataTable, NInputNumber, NSpin } from 'naive-ui';
 import { apiManualImport } from '@/api/manualImport';
-import type { FileMapping, ImportApplyResult, ImportCandidate, ImportPreview } from '#/manualImport';
+import type {
+  FileMapping,
+  FolderFileMapping,
+  FolderImportPreview,
+  ImportApplyResult,
+  ImportCandidate,
+  ImportPreview,
+} from '#/manualImport';
 
 const show = defineModel('show', { default: false });
 
@@ -9,17 +16,28 @@ const { t } = useMyI18n();
 const message = useMessage();
 
 type Step = 'pick' | 'form' | 'preview' | 'result';
+type Mode = 'torrent' | 'folder' | 'upload';
+type AnyMapping = FileMapping | FolderFileMapping;
 const step = ref<Step>('pick');
+const mode = ref<Mode>('torrent');
+// Once picked (from the candidate list or via upload), both behave
+// identically from here on -- same preview/apply endpoints, keyed by hash.
+const usesTorrentFlow = computed(
+  () => mode.value === 'torrent' || mode.value === 'upload'
+);
 
 const candidates = ref<ImportCandidate[]>([]);
 const selected = ref<ImportCandidate | null>(null);
+const folderPath = ref('');
+const uploadFile = ref<File | null>(null);
 const officialTitle = ref('');
 const season = ref(1);
-const preview = ref<ImportPreview | null>(null);
+const preview = ref<ImportPreview | FolderImportPreview | null>(null);
 const results = ref<ImportApplyResult[]>([]);
 
 const loading = reactive({
   candidates: false,
+  upload: false,
   preview: false,
   apply: false,
 });
@@ -41,19 +59,58 @@ function pick(candidate: ImportCandidate) {
   step.value = 'form';
 }
 
+function pickFolder() {
+  const path = folderPath.value.trim();
+  if (!path) {
+    message.error(t('manual_import.folder_path_required'));
+    return;
+  }
+  officialTitle.value = path.split(/[/\\]/).filter(Boolean).pop() ?? '';
+  step.value = 'form';
+}
+
+function onFileSelected(e: Event) {
+  const input = e.target as HTMLInputElement;
+  uploadFile.value = input.files?.[0] ?? null;
+}
+
+async function pickUpload() {
+  if (!uploadFile.value) {
+    message.error(t('manual_import.upload_file_required'));
+    return;
+  }
+  loading.upload = true;
+  try {
+    const candidate = await apiManualImport.uploadTorrent(uploadFile.value);
+    selected.value = candidate;
+    officialTitle.value = candidate.name;
+    step.value = 'form';
+  } catch (e) {
+    message.error(t('manual_import.upload_failed'));
+  } finally {
+    loading.upload = false;
+  }
+}
+
 async function runPreview() {
-  if (!selected.value) return;
+  if (usesTorrentFlow.value && !selected.value) return;
   if (!officialTitle.value.trim()) {
     message.error(t('manual_import.title_required'));
     return;
   }
   loading.preview = true;
   try {
-    preview.value = await apiManualImport.preview(
-      selected.value.hash,
-      officialTitle.value.trim(),
-      season.value
-    );
+    preview.value = usesTorrentFlow.value
+      ? await apiManualImport.preview(
+          selected.value!.hash,
+          officialTitle.value.trim(),
+          season.value
+        )
+      : await apiManualImport.previewFolder(
+          folderPath.value.trim(),
+          officialTitle.value.trim(),
+          season.value
+        );
     step.value = 'preview';
   } catch (e) {
     message.error(t('manual_import.preview_failed'));
@@ -63,15 +120,19 @@ async function runPreview() {
 }
 
 async function confirmApply() {
-  if (!selected.value || !preview.value) return;
+  if (!preview.value) return;
+  if (usesTorrentFlow.value && !selected.value) return;
   loading.apply = true;
   try {
-    const mappings: FileMapping[] = preview.value.mappings;
-    results.value = await apiManualImport.apply(
-      selected.value.hash,
-      preview.value.target_folder,
-      mappings
-    );
+    results.value = usesTorrentFlow.value
+      ? await apiManualImport.apply(
+          selected.value!.hash,
+          preview.value.target_folder,
+          preview.value.mappings as FileMapping[]
+        )
+      : await apiManualImport.applyFolder(
+          preview.value.mappings as FolderFileMapping[]
+        );
     step.value = 'result';
   } catch (e) {
     message.error(t('manual_import.apply_failed'));
@@ -82,7 +143,10 @@ async function confirmApply() {
 
 function reset() {
   step.value = 'pick';
+  mode.value = 'torrent';
   selected.value = null;
+  folderPath.value = '';
+  uploadFile.value = null;
   officialTitle.value = '';
   season.value = 1;
   preview.value = null;
@@ -142,7 +206,7 @@ const candidateColumns: DataTableColumns<ImportCandidate> = [
   },
 ];
 
-const previewColumns: DataTableColumns<FileMapping> = [
+const previewColumns: DataTableColumns<AnyMapping> = [
   { title: () => t('manual_import.source'), key: 'source_path', ellipsis: { tooltip: true } },
   { title: () => t('manual_import.target'), key: 'target_path', ellipsis: { tooltip: true } },
 ];
@@ -163,21 +227,71 @@ const resultColumns: DataTableColumns<ImportApplyResult> = [
 
 <template>
   <ab-modal v-model:show="show" :title="$t('manual_import.title')">
-    <!-- Step 1: pick an unmanaged torrent -->
+    <!-- Step 1: pick an unmanaged torrent, or point at a folder directly -->
     <div v-if="step === 'pick'" class="import-step">
-      <p class="import-hint">{{ $t('manual_import.pick_hint') }}</p>
-      <NSpin :show="loading.candidates">
-        <NDataTable
-          :columns="candidateColumns"
-          :data="candidates"
-          :row-key="(row: ImportCandidate) => row.hash"
-          :pagination="false"
-          size="small"
-        />
-        <div v-if="!loading.candidates && candidates.length === 0" class="import-empty">
-          {{ $t('manual_import.no_candidates') }}
+      <div class="mode-tabs">
+        <button
+          type="button"
+          class="mode-tab"
+          :class="{ active: mode === 'torrent' }"
+          @click="mode = 'torrent'"
+        >
+          {{ $t('manual_import.mode_torrent') }}
+        </button>
+        <button
+          type="button"
+          class="mode-tab"
+          :class="{ active: mode === 'folder' }"
+          @click="mode = 'folder'"
+        >
+          {{ $t('manual_import.mode_folder') }}
+        </button>
+        <button
+          type="button"
+          class="mode-tab"
+          :class="{ active: mode === 'upload' }"
+          @click="mode = 'upload'"
+        >
+          {{ $t('manual_import.mode_upload') }}
+        </button>
+      </div>
+
+      <template v-if="mode === 'torrent'">
+        <p class="import-hint">{{ $t('manual_import.pick_hint') }}</p>
+        <NSpin :show="loading.candidates">
+          <NDataTable
+            :columns="candidateColumns"
+            :data="candidates"
+            :row-key="(row: ImportCandidate) => row.hash"
+            :pagination="false"
+            size="small"
+          />
+          <div v-if="!loading.candidates && candidates.length === 0" class="import-empty">
+            {{ $t('manual_import.no_candidates') }}
+          </div>
+        </NSpin>
+      </template>
+
+      <template v-else-if="mode === 'folder'">
+        <p class="import-hint">{{ $t('manual_import.folder_hint') }}</p>
+        <div class="form-group">
+          <label class="form-label">{{ $t('manual_import.folder_path') }}</label>
+          <input
+            v-model="folderPath"
+            type="text"
+            class="form-input"
+            :placeholder="$t('manual_import.folder_path_placeholder')"
+          />
         </div>
-      </NSpin>
+      </template>
+
+      <template v-else>
+        <p class="import-hint">{{ $t('manual_import.upload_hint') }}</p>
+        <div class="form-group">
+          <label class="form-label">{{ $t('manual_import.upload_file') }}</label>
+          <input type="file" accept=".torrent" @change="onFileSelected" />
+        </div>
+      </template>
     </div>
 
     <!-- Step 2: show name + season -->
@@ -200,7 +314,7 @@ const resultColumns: DataTableColumns<ImportApplyResult> = [
       <NDataTable
         :columns="previewColumns"
         :data="preview.mappings"
-        :row-key="(row: FileMapping) => row.source_path"
+        :row-key="(row: AnyMapping) => row.source_path"
         :pagination="false"
         size="small"
       />
@@ -227,6 +341,25 @@ const resultColumns: DataTableColumns<ImportApplyResult> = [
       <template v-if="step === 'pick'">
         <ab-button variant="secondary" size="sm" @click="close">
           {{ $t('setup.nav.cancel') }}
+        </ab-button>
+        <ab-button
+          v-if="mode === 'folder'"
+          variant="primary"
+          size="sm"
+          :disabled="!folderPath.trim()"
+          @click="pickFolder"
+        >
+          {{ $t('setup.nav.next') }}
+        </ab-button>
+        <ab-button
+          v-else-if="mode === 'upload'"
+          variant="primary"
+          size="sm"
+          :loading="loading.upload"
+          :disabled="!uploadFile"
+          @click="pickUpload"
+        >
+          {{ $t('setup.nav.next') }}
         </ab-button>
       </template>
       <template v-else-if="step === 'form'">
@@ -277,6 +410,32 @@ const resultColumns: DataTableColumns<ImportApplyResult> = [
   font-size: 13px;
   color: var(--color-text-secondary);
   margin: 0;
+}
+
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  width: fit-content;
+}
+
+.mode-tab {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+
+  &.active {
+    background: var(--color-primary);
+    color: var(--color-white);
+  }
 }
 
 .import-empty {
