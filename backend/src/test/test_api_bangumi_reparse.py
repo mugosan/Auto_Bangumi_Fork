@@ -27,6 +27,7 @@ _MOVED_RESULT = ReparseResult(
     old_folder="/downloads/Wrong Title/Season 1",
     new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
     folder_changed=True,
+    torrents_found=2,
     torrents_moved=2,
     torrents_failed=0,
 )
@@ -79,6 +80,7 @@ class TestReparseRoute:
             old_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
             new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
             folder_changed=False,
+            torrents_found=0,
             torrents_moved=0,
             torrents_failed=0,
         )
@@ -110,6 +112,7 @@ class TestReparseRoute:
             old_folder="/downloads/Wrong Title/Season 1",
             new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
             folder_changed=True,
+            torrents_found=2,
             torrents_moved=1,
             torrents_failed=1,
         )
@@ -126,6 +129,43 @@ class TestReparseRoute:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] is False
+
+    def test_reparse_no_torrents_found_explains_why_nothing_moved(self, authed_client):
+        """The exact symptom reported in production: folder_changed is True
+        (TMDB resolution worked) but nothing is tracked for this bangumi, so
+        0 moved -- the message must say why instead of looking like a
+        silent no-op."""
+        result = ReparseResult(
+            old_official_title="Wrong Title",
+            new_official_title="Correct Title",
+            old_year=None,
+            new_year="2019",
+            old_tvdb_id=None,
+            new_tvdb_id=359274,
+            old_id_source=None,
+            new_id_source="tvdb",
+            old_folder="/downloads/Wrong Title/Season 1",
+            new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
+            folder_changed=True,
+            torrents_found=0,
+            torrents_moved=0,
+            torrents_failed=0,
+        )
+        patcher = _patch_download_client(AsyncMock())
+        try:
+            with patch(
+                "module.api.bangumi.reparse_bangumi",
+                AsyncMock(return_value=result),
+            ):
+                response = authed_client.post("/api/v1/bangumi/reparse/1")
+        finally:
+            patcher.stop()
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] is True
+        assert "No tracked torrents found" in body["msg_en"]
+        assert result.new_folder in body["msg_en"]
 
     def test_reparse_unauthorized(self, unauthed_client):
         response = unauthed_client.post("/api/v1/bangumi/reparse/1")

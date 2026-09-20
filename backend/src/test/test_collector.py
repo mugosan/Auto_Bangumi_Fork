@@ -345,6 +345,18 @@ class TestSubscribeSeasonTmdbResolution:
         mock_tmdb.assert_not_awaited()
 
 
+def _client_with_tagged_torrents(tagged=None, **overrides):
+    """AsyncMock download client with get_torrent_info() defaulting to an
+    empty list -- reparse_bangumi() always calls it (for the ab:<id> tag
+    fallback lookup), so leaving it unconfigured would iterate a bare
+    MagicMock and blow up with TypeError."""
+    client = AsyncMock()
+    client.get_torrent_info = AsyncMock(return_value=tagged or [])
+    for name, value in overrides.items():
+        setattr(client, name, value)
+    return client
+
+
 class TestReparseBangumi:
     """reparse_bangumi(): re-run TMDB for an existing bangumi (e.g. one
     subscribed before the search-subscribe fix, or added with a bare title)
@@ -371,7 +383,7 @@ class TestReparseBangumi:
                 )
             )
 
-        client = AsyncMock()
+        client = _client_with_tagged_torrents()
         tmdb_result = ("Correct Title", 2, "2019", "poster.jpg", 359274, "tvdb")
 
         async with Database() as db:
@@ -388,6 +400,7 @@ class TestReparseBangumi:
         assert result.new_tvdb_id == 359274
         assert result.new_id_source == "tvdb"
         assert result.folder_changed is True
+        assert result.torrents_found == 1
         assert result.torrents_moved == 1
         assert result.torrents_failed == 0
         client.move_torrent.assert_awaited_once_with("abc123", result.new_folder)
@@ -401,7 +414,7 @@ class TestReparseBangumi:
             assert updated.save_path == result.new_folder
 
     async def test_returns_none_for_unknown_bangumi(self):
-        client = AsyncMock()
+        client = _client_with_tagged_torrents()
         async with Database() as db:
             result = await reparse_bangumi(db, client, 999999)
 
@@ -429,7 +442,7 @@ class TestReparseBangumi:
                 )
             )
 
-        client = AsyncMock()
+        client = _client_with_tagged_torrents()
         tmdb_result = ("Already Correct", 1, "2019", "poster.jpg", 359274, "tvdb")
 
         async with Database() as db:
@@ -442,7 +455,10 @@ class TestReparseBangumi:
         assert result is not None
         assert result.folder_changed is False
         assert result.torrents_moved == 0
+        # Folder didn't change, so we never even looked for torrents to move.
+        assert result.torrents_found == 0
         client.move_torrent.assert_not_awaited()
+        client.get_torrent_info.assert_not_awaited()
 
     async def test_reports_per_torrent_move_failure_without_aborting(self):
         bangumi = make_bangumi(
@@ -468,7 +484,7 @@ class TestReparseBangumi:
                 )
             )
 
-        client = AsyncMock()
+        client = _client_with_tagged_torrents()
         client.move_torrent = AsyncMock(side_effect=[None, RuntimeError("boom")])
         tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
 
@@ -480,5 +496,102 @@ class TestReparseBangumi:
                 result = await reparse_bangumi(db, client, bangumi_id)
 
         assert result is not None
+        assert result.torrents_found == 2
         assert result.torrents_moved == 1
         assert result.torrents_failed == 1
+
+    async def test_finds_torrents_via_ab_tag_when_db_link_is_missing(self):
+        """Regression: a bangumi whose folder needs fixing is exactly the
+        kind whose Torrent.bangumi_id FK may be stale/missing (e.g. broken
+        by whatever caused the wrong metadata in the first place) -- the
+        downloader's own "ab:<id>" tag must still find its torrents so
+        reparse doesn't silently report 0 torrents moved."""
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            # Deliberately no db.torrent.add() -- nothing in the Torrent
+            # table links to this bangumi_id, only the downloader's tag does.
+
+        client = _client_with_tagged_torrents(
+            tagged=[
+                {"hash": "tagged-hash", "name": "ep1.mkv", "tags": f"ab:{bangumi_id}"}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_found == 1
+        assert result.torrents_moved == 1
+        client.move_torrent.assert_awaited_once_with("tagged-hash", result.new_folder)
+        client.get_torrent_info.assert_awaited_once_with(
+            category=None, status_filter=None, tag=f"ab:{bangumi_id}"
+        )
+
+    async def test_deduplicates_a_torrent_found_via_both_db_and_tag(self):
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="same-hash",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        client = _client_with_tagged_torrents(
+            tagged=[{"hash": "same-hash", "name": "ep1.mkv"}]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_found == 1
+        assert result.torrents_moved == 1
+
+    async def test_reports_zero_found_when_no_torrent_is_tracked_anywhere(self):
+        """The exact symptom reported: TMDB resolution succeeds, the folder
+        changes, but nothing is tracked under this bangumi_id in either the
+        DB or the downloader's tags -- 0 moved, and torrents_found says why."""
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+
+        client = _client_with_tagged_torrents()
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.folder_changed is True
+        assert result.torrents_found == 0
+        assert result.torrents_moved == 0
+        client.move_torrent.assert_not_awaited()

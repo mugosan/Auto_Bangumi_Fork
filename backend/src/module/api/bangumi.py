@@ -328,14 +328,30 @@ async def reparse_rule(bangumi_id: int, db: Database = Depends(get_db)):
                 ),
             },
         )
-    detail_en = f"Moved {result.torrents_moved} torrent(s) to {result.new_folder}"
-    detail_zh = f"已将 {result.torrents_moved} 个种子移动到 {result.new_folder}"
-    if result.torrents_failed:
-        detail_en += f" ({result.torrents_failed} failed)."
-        detail_zh += f"（{result.torrents_failed} 个失败）。"
+    if result.torrents_found == 0:
+        detail_en = (
+            f"No tracked torrents found for this bangumi -- nothing to move. "
+            f"Its files may need moving by hand into {result.new_folder}."
+        )
+        detail_zh = (
+            f"没有找到与该番剧关联的种子，无需移动。"
+            f"其文件可能需要手动移动到 {result.new_folder}。"
+        )
     else:
-        detail_en += "."
-        detail_zh += "。"
+        detail_en = (
+            f"Moved {result.torrents_moved} of {result.torrents_found} "
+            f"torrent(s) to {result.new_folder}"
+        )
+        detail_zh = (
+            f"已将 {result.torrents_moved}/{result.torrents_found} "
+            f"个种子移动到 {result.new_folder}"
+        )
+        if result.torrents_failed:
+            detail_en += f" ({result.torrents_failed} failed)."
+            detail_zh += f"（{result.torrents_failed} 个失败）。"
+        else:
+            detail_en += "."
+            detail_zh += "。"
     return JSONResponse(
         status_code=200,
         content={

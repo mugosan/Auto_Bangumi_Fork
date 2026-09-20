@@ -100,6 +100,7 @@ class ReparseResult:
     old_folder: str
     new_folder: str
     folder_changed: bool
+    torrents_found: int
     torrents_moved: int
     torrents_failed: int
 
@@ -156,19 +157,18 @@ async def reparse_bangumi(
     await db.bangumi.update(bangumi)
 
     folder_changed = old_folder != new_folder
+    hashes: set[str] = set()
     torrents_moved = 0
     torrents_failed = 0
     if folder_changed:
-        torrents = await db.torrent.search_by_bangumi_id(bangumi_id)
-        for torrent in torrents:
-            if not torrent.qb_hash:
-                continue
+        hashes = await _find_torrent_hashes(db, client, bangumi_id)
+        for torrent_hash in hashes:
             try:
-                await client.move_torrent(torrent.qb_hash, new_folder)
+                await client.move_torrent(torrent_hash, new_folder)
                 torrents_moved += 1
             except Exception as e:
                 logger.warning(
-                    f"Failed to move torrent {torrent.qb_hash} during "
+                    f"Failed to move torrent {torrent_hash} during "
                     f"reparse of bangumi {bangumi_id}: {e}"
                 )
                 torrents_failed += 1
@@ -185,9 +185,34 @@ async def reparse_bangumi(
         old_folder=old_folder,
         new_folder=new_folder,
         folder_changed=folder_changed,
+        torrents_found=len(hashes),
         torrents_moved=torrents_moved,
         torrents_failed=torrents_failed,
     )
+
+
+async def _find_torrent_hashes(
+    db: Database, client: DownloadClient, bangumi_id: int
+) -> set[str]:
+    """Every torrent hash associated with a bangumi, from both sources this
+    codebase uses for that link (see renamer.py's _lookup_offsets, which
+    faces the identical problem): the Torrent table's bangumi_id FK, and the
+    downloader's own "ab:<id>" tag. A bangumi whose folder needs reparsing/
+    fixing is exactly the kind whose DB bookkeeping may be inconsistent --
+    relying on the FK alone silently finds nothing to move for such a
+    bangumi even though the downloader still knows exactly which torrents
+    are its via the tag.
+    """
+    hashes = {
+        t.qb_hash
+        for t in await db.torrent.search_by_bangumi_id(bangumi_id)
+        if t.qb_hash
+    }
+    tagged = await client.get_torrent_info(
+        category=None, status_filter=None, tag=f"ab:{bangumi_id}"
+    )
+    hashes.update(info["hash"] for info in tagged if info.get("hash"))
+    return hashes
 
 
 class SeasonCollector:
