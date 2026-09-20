@@ -247,6 +247,12 @@ describe('Bangumi API Logic', () => {
       expect(axios.post).toHaveBeenCalledWith('api/v1/bangumi/dismiss-review/1');
     });
 
+    it('should POST api/v1/bangumi/reparse/:id when reparsing a show', async () => {
+      (axios.post as any).mockResolvedValue({ data: mockApiSuccess });
+      await apiBangumi.reparse(1);
+      expect(axios.post).toHaveBeenCalledWith('api/v1/bangumi/reparse/1');
+    });
+
     it('should PATCH api/v1/bangumi/:id/weekday with the weekday when setting the weekday', async () => {
       (axios.patch as any).mockResolvedValue({ data: mockApiSuccess });
       await apiBangumi.setWeekday(1, 3);

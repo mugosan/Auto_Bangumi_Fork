@@ -962,6 +962,7 @@ function handleFilterClick(
         <AbSearchConfirm
           v-if="selectedResult"
           :bangumi="selectedResult"
+          :provider="provider"
           @confirm="handleConfirm"
           @cancel="clearSelectedResult"
         />

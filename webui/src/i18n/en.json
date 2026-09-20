@@ -212,9 +212,20 @@
     }
   },
   "manual_import": {
-    "open_button": "Import a torrent",
-    "title": "Import a torrent",
+    "open_button": "Import files",
+    "title": "Import files",
+    "mode_torrent": "From downloader",
+    "mode_folder": "From a folder path",
+    "mode_upload": "Upload a .torrent file",
     "pick_hint": "Torrents added directly in your downloader (not through a subscription or Search/Collect) can be organized into your library here.",
+    "folder_hint": "Point at a folder AutoBangumi's own process can see (a bind-mounted path, not necessarily your own desktop) and it will be scanned recursively for media/subtitle files.",
+    "folder_path": "Folder path",
+    "folder_path_placeholder": "/downloads/some-folder",
+    "folder_path_required": "Enter a folder path first.",
+    "upload_hint": "Upload a .torrent file directly -- it's added to your downloader, then walks through the same show name/season, preview, and confirm flow as everything else.",
+    "upload_file": "Torrent file",
+    "upload_file_required": "Choose a .torrent file first.",
+    "upload_failed": "Could not add this .torrent file to your downloader.",
     "no_candidates": "No unmanaged torrents found.",
     "torrent_name": "Torrent",
     "size": "Size",
@@ -234,8 +245,8 @@
     "done": "Done",
     "load_failed": "Could not load torrents from your downloader.",
     "title_required": "Enter the show's name first.",
-    "preview_failed": "Could not build a preview for this torrent.",
-    "apply_failed": "Could not move/rename this torrent's files."
+    "preview_failed": "Could not build a preview.",
+    "apply_failed": "Could not move/rename these files."
   },
   "homepage": {
     "load_failed": {
@@ -291,7 +302,10 @@
       "season": "Season",
       "year": "Year",
       "yes_btn": "Yes",
-      "view_torrents": "View torrents"
+      "view_torrents": "View torrents",
+      "reparse": "Reparse",
+      "reparse_confirm_title": "Reparse this show?",
+      "reparse_confirm_body": "Re-runs the TMDB/TVDB parser and moves already-downloaded torrents into the corrected folder if the title/year/id changed. Season is left untouched, and individual filenames aren't changed."
     },
     "others": {
       "title": "Unmatched torrents"
@@ -539,6 +553,7 @@
       "next": "Next",
       "previous": "Previous",
       "skip": "Skip",
+      "cancel": "Cancel",
       "step": "Step {current} of {total}"
     }
   },
@@ -628,7 +643,8 @@
       "save_path": "Save Path",
       "save_path_placeholder": "Leave empty for default path",
       "advanced": "Advanced Settings",
-      "subscribe": "Subscribe"
+      "subscribe": "Subscribe",
+      "resolving": "Resolving metadata…"
     }
   },
   "access": {

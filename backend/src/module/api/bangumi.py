@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from module.conf import settings
 from module.database import Database, get_db
 from module.downloader import DownloadClient
-from module.manager import Renamer, TorrentManager
+from module.manager import Renamer, TorrentManager, reparse_bangumi
 from module.models import APIResponse, Bangumi, BangumiUpdate, ResponseModel, Torrent
 from module.parser.analyser.offset_detector import (
     OffsetSuggestion as DetectorSuggestion,
@@ -289,6 +289,67 @@ async def suggest_offset(bangumi_id: int, db: Database = Depends(get_db)):
     manager = TorrentManager(db)
     resp = await manager.suggest_offset(bangumi_id)
     return resp
+
+
+@router.post(
+    path="/reparse/{bangumi_id}",
+    response_model=APIResponse,
+    dependencies=[Depends(get_current_user)],
+)
+async def reparse_rule(bangumi_id: int, db: Database = Depends(get_db)):
+    """Re-run the TMDB/TVDB parser and move already-downloaded torrents into
+    the corrected folder -- for a bangumi originally added with wrong or
+    missing metadata (e.g. subscribed before the search-subscribe TMDB fix).
+    Season is left untouched; only official_title/year/tvdb_id/id_source and
+    the resulting folder are corrected. Per-file names aren't touched."""
+    async with DownloadClient() as client:
+        result = await reparse_bangumi(db, client, bangumi_id)
+    if result is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": False,
+                "msg_en": f"Bangumi {bangumi_id} not found.",
+                "msg_zh": f"未找到番剧 {bangumi_id}。",
+            },
+        )
+    if not result.folder_changed:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": True,
+                "msg_en": (
+                    f'Refreshed as "{result.new_official_title}" '
+                    f"({result.new_year or 'unknown year'}); folder was already correct."
+                ),
+                "msg_zh": (
+                    f"已刷新为「{result.new_official_title}」"
+                    f"（{result.new_year or '年份未知'}）；文件夹路径本就正确。"
+                ),
+            },
+        )
+    detail_en = f"Moved {result.torrents_moved} torrent(s) to {result.new_folder}"
+    detail_zh = f"已将 {result.torrents_moved} 个种子移动到 {result.new_folder}"
+    if result.torrents_failed:
+        detail_en += f" ({result.torrents_failed} failed)."
+        detail_zh += f"（{result.torrents_failed} 个失败）。"
+    else:
+        detail_en += "."
+        detail_zh += "。"
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": result.torrents_failed == 0,
+            "msg_en": (
+                f'Reparsed as "{result.new_official_title}" '
+                f"({result.new_year or 'unknown year'}). {detail_en}"
+            ),
+            "msg_zh": (
+                f"已重新解析为「{result.new_official_title}」"
+                f"（{result.new_year or '年份未知'}）。{detail_zh}"
+            ),
+        },
+    )
 
 
 @router.post(

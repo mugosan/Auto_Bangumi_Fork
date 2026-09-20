@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from module.database import Database
 from module.downloader import AddResult
-from module.manager.collector import SeasonCollector
+from module.manager.collector import SeasonCollector, reparse_bangumi
 from module.models import Torrent
 from test.factories import make_bangumi
 
@@ -213,6 +213,12 @@ class TestSubscribeSeasonTmdbResolution:
     user: Search -> pick -> Subscribe never invoked the parser, while
     Add RSS -> Analyze -> Subscribe (which does call the full parser before
     subscribe_season ever sees the data) worked fine.
+
+    parser="mikan" gets the same treatment for year/tvdb_id/id_source (mikan
+    never resolved those at all, search-sourced or not -- a follow-up gap
+    found once "tmdb" was fixed and the inconsistency became obvious), but
+    keeps its own official_title/season since Mikan's homepage scrape is the
+    more reliable source for those two.
     """
 
     async def test_search_sourced_subscribe_resolves_before_saving(self):
@@ -279,11 +285,45 @@ class TestSubscribeSeasonTmdbResolution:
 
         mock_tmdb.assert_not_awaited()
 
-    async def test_mikan_parser_subscribe_is_never_resolved_via_tmdb(self):
-        """parser="mikan" must never trigger a TMDB/TVDB lookup, resolved or
-        not -- mikan gets its title/poster from the Mikan homepage scrape,
-        by design, same as the automated RSS flow."""
-        data = make_bangumi(filter="", year=None, tvdb_id=None)
+    async def test_mikan_parser_subscribe_resolves_year_and_tvdb_but_keeps_title(self):
+        """parser="mikan" gets the same year/tvdb_id/id_source cross-
+        reference as "tmdb" (mikan's own homepage scrape never provides
+        those), but keeps its own official_title/season -- Mikan's scrape is
+        more reliable for those than a TMDB text search, and overwriting
+        season with TMDB's own guess is a plausible cause of separate
+        season-mislabeling reports."""
+        data = make_bangumi(
+            filter="", year=None, tvdb_id=None, official_title="Mikan Title", season=1
+        )
+        downloader_client = AsyncMock()
+        downloader_client.add_torrent = AsyncMock(return_value=AddResult.ADDED)
+        tmdb_result = ("TMDB Title", 2, "2019", "poster.jpg", 359274, "tvdb")
+        with (
+            patch(
+                "module.rss.engine.RequestContent",
+                return_value=_req_with_torrents(_make_torrents()),
+            ),
+            patch(
+                "module.rss.engine.DownloadClient",
+                return_value=_async_ctx(downloader_client),
+            ),
+            patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ) as mock_tmdb,
+        ):
+            await SeasonCollector.subscribe_season(data, parser="mikan")
+
+        mock_tmdb.assert_awaited_once()
+        assert data.official_title == "Mikan Title"
+        assert data.season == 1
+        assert data.year == "2019"
+        assert data.tvdb_id == 359274
+        assert data.id_source == "tvdb"
+
+    async def test_already_resolved_mikan_subscribe_is_not_re_resolved(self):
+        """Same not-re-resolved guard as the "tmdb" case applies to "mikan"."""
+        data = make_bangumi(filter="", year="2019", tvdb_id=359274, id_source="tvdb")
         downloader_client = AsyncMock()
         downloader_client.add_torrent = AsyncMock(return_value=AddResult.ADDED)
         with (
@@ -303,3 +343,142 @@ class TestSubscribeSeasonTmdbResolution:
             await SeasonCollector.subscribe_season(data, parser="mikan")
 
         mock_tmdb.assert_not_awaited()
+
+
+class TestReparseBangumi:
+    """reparse_bangumi(): re-run TMDB for an existing bangumi (e.g. one
+    subscribed before the search-subscribe fix, or added with a bare title)
+    and move its already-downloaded torrents into the corrected folder."""
+
+    async def test_reparses_metadata_and_moves_torrents(self):
+        bangumi = make_bangumi(
+            filter="",
+            official_title="Wrong Title",
+            year=None,
+            tvdb_id=None,
+            id_source=None,
+            season=1,
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        client = AsyncMock()
+        tmdb_result = ("Correct Title", 2, "2019", "poster.jpg", 359274, "tvdb")
+
+        async with Database() as db:
+            with patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.old_official_title == "Wrong Title"
+        assert result.new_official_title == "Correct Title"
+        assert result.new_year == "2019"
+        assert result.new_tvdb_id == 359274
+        assert result.new_id_source == "tvdb"
+        assert result.folder_changed is True
+        assert result.torrents_moved == 1
+        assert result.torrents_failed == 0
+        client.move_torrent.assert_awaited_once_with("abc123", result.new_folder)
+
+        async with Database() as db:
+            updated = await db.bangumi.search_id(bangumi_id)
+            assert updated is not None
+            assert updated.official_title == "Correct Title"
+            assert updated.season == 1  # unchanged despite tmdb_result season=2
+            assert updated.tvdb_id == 359274
+            assert updated.save_path == result.new_folder
+
+    async def test_returns_none_for_unknown_bangumi(self):
+        client = AsyncMock()
+        async with Database() as db:
+            result = await reparse_bangumi(db, client, 999999)
+
+        assert result is None
+        client.move_torrent.assert_not_awaited()
+
+    async def test_already_correct_folder_moves_nothing(self):
+        bangumi = make_bangumi(
+            filter="",
+            official_title="Already Correct",
+            year="2019",
+            tvdb_id=359274,
+            id_source="tvdb",
+            season=1,
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        client = AsyncMock()
+        tmdb_result = ("Already Correct", 1, "2019", "poster.jpg", 359274, "tvdb")
+
+        async with Database() as db:
+            with patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.folder_changed is False
+        assert result.torrents_moved == 0
+        client.move_torrent.assert_not_awaited()
+
+    async def test_reports_per_torrent_move_failure_without_aborting(self):
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="hash1",
+                    bangumi_id=bangumi_id,
+                )
+            )
+            await db.torrent.add(
+                Torrent(
+                    name="ep2.mkv",
+                    url="https://example.com/ep2.torrent",
+                    qb_hash="hash2",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        client = AsyncMock()
+        client.move_torrent = AsyncMock(side_effect=[None, RuntimeError("boom")])
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with patch(
+                "module.manager.collector.TitleParser.tmdb_parser",
+                AsyncMock(return_value=tmdb_result),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_moved == 1
+        assert result.torrents_failed == 1

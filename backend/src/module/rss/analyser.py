@@ -80,6 +80,33 @@ class RSSAnalyser:
                     bangumi.poster_link = poster_link
                     if official_title:
                         bangumi.official_title = official_title
+            # Mikan's homepage scrape gives title/poster but never a year or
+            # TheTVDB/TMDB id -- cross-reference the resolved title against
+            # TMDB for those two only. Deliberately does NOT overwrite
+            # bangumi.season with TMDB's own season guess (unlike the
+            # "tmdb" branch below): season here already came from the
+            # release title via the real parser, and TMDB's guess is a
+            # plausible cause of separate season-mislabeling reports.
+            try:
+                (
+                    _tmdb_title,
+                    _tmdb_season,
+                    year,
+                    _tmdb_poster,
+                    meta_id,
+                    id_source,
+                ) = await TitleParser.tmdb_parser(
+                    bangumi.official_title,
+                    bangumi.season,
+                    settings.rss_parser.language,
+                    episode_type=bangumi.episode_type,
+                )
+            except Exception as e:
+                logger.warning(f"TMDB cross-reference for Mikan title failed: {e}")
+            else:
+                bangumi.year = year
+                bangumi.tvdb_id = meta_id
+                bangumi.id_source = id_source
         elif rss.parser == "tmdb":
             tmdb_title, season, year, poster_link, meta_id, id_source = (
                 await TitleParser.tmdb_parser(

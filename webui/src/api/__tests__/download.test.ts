@@ -38,4 +38,15 @@ describe('Download API contract (path + HTTP method)', () => {
       rss: mockRSSItem,
     });
   });
+
+  it('should POST api/v1/rss/resolve with the bangumi and rss payload when previewing metadata', async () => {
+    (axios.post as any).mockResolvedValue({ data: mockBangumiAPI });
+    const result = await apiDownload.resolve(mockBangumiRule, mockRSSItem);
+    expect(axios.post).toHaveBeenCalledWith('api/v1/rss/resolve', {
+      data: mockBangumiAPI,
+      rss: mockRSSItem,
+    });
+    expect(result.filter).toEqual(mockBangumiRule.filter);
+    expect(result.rss_link).toEqual(mockBangumiRule.rss_link);
+  });
 });

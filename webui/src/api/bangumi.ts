@@ -198,6 +198,18 @@ export const apiBangumi = {
   },
 
   /**
+   * 重新通过 TMDB/TVDB 解析该番剧并把已下载的种子移动到修正后的文件夹
+   * （不会修改季度，也不会重命名单个文件）
+   * @param bangumiId - bangumi 的 id
+   */
+  async reparse(bangumiId: number) {
+    const { data } = await axios.post<ApiSuccess>(
+      `api/v1/bangumi/reparse/${bangumiId}`
+    );
+    return data;
+  },
+
+  /**
    * 手动设置番剧的放送星期
    * @param bangumiId - bangumi 的 id
    * @param weekday - 0-6 for Mon-Sun, null to reset

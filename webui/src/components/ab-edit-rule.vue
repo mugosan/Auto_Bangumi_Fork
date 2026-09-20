@@ -23,6 +23,7 @@ const rule = defineModel<BangumiRule>('rule', {
 });
 
 const message = useMessage();
+const { getAll } = useBangumiStore();
 
 // Local deep copy for editing (prevents mutation of original)
 const localRule = ref<BangumiRule>(JSON.parse(JSON.stringify(rule.value)));
@@ -41,6 +42,29 @@ const { posterSrc, infoTags, showAdvanced, copied, copyRssLink } =
 const offsetLoading = ref(false);
 const offsetReason = ref('');
 const dismissingReview = ref(false);
+const { confirm } = useConfirm();
+
+const { execute: executeReparse, isLoading: reparsing } = useApi(
+  apiBangumi.reparse,
+  {
+    onSuccess() {
+      // The backend may have corrected official_title/year/tvdb_id -- refetch
+      // this row so the modal (and the list behind it) shows the new values
+      // instead of the stale local copy.
+      getAll();
+    },
+  }
+);
+
+async function reparseBangumi() {
+  if (!rule.value.id) return;
+  const ok = await confirm({
+    title: t('homepage.rule.reparse_confirm_title'),
+    body: t('homepage.rule.reparse_confirm_body'),
+  });
+  if (!ok) return;
+  await executeReparse(rule.value.id);
+}
 
 // Delete file dialog state
 const deleteFileDialog = reactive<{
@@ -407,6 +431,14 @@ function emitUnarchive() {
     <template #footer>
       <ab-button size="sm" variant="ghost" @click="goToTorrents">
         {{ $t('homepage.rule.view_torrents') }}
+      </ab-button>
+      <ab-button
+        size="sm"
+        variant="ghost"
+        :loading="reparsing"
+        @click="reparseBangumi"
+      >
+        {{ $t('homepage.rule.reparse') }}
       </ab-button>
       <ab-button v-if="localRule.archived" size="sm" @click="emitUnarchive">
         {{ $t('homepage.rule.unarchive') }}

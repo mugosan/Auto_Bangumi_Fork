@@ -14,9 +14,11 @@ import type {
   OffsetSuggestionDetail,
   TMDBSummary,
 } from '#/bangumi';
+import type { RSS } from '#/rss';
 
 const props = defineProps<{
   bangumi: BangumiRule;
+  provider: string;
 }>();
 
 const emit = defineEmits<{
@@ -37,8 +39,7 @@ watch(
   () => props.bangumi,
   (newVal) => {
     localBangumi.value = JSON.parse(JSON.stringify(newVal));
-    // Re-detect offset when bangumi changes
-    detectOffsetMismatch();
+    initialize();
   },
   { deep: true }
 );
@@ -49,6 +50,43 @@ const posterSrc = computed(() =>
 const showAdvanced = ref(false);
 const copied = ref(false);
 const offsetLoading = ref(false);
+const resolvingMetadata = ref(false);
+
+// Search results are built without a full TMDB lookup for listing
+// responsiveness (searcher.py/analyse_keyword) -- only a lightweight
+// title/poster patch. Resolve the real year/poster/tvdb_id here, once a
+// specific torrent/source has been picked, so this confirm screen shows
+// the same resolved info Add RSS -> Analyze already shows, before the
+// user commits to Subscribe. subscribe_season re-resolves as a safety net
+// if this call fails or is skipped, so nothing is lost either way.
+async function resolveMetadata() {
+  if (!localBangumi.value.official_title) return;
+  resolvingMetadata.value = true;
+  try {
+    const rss: RSS = {
+      id: 0,
+      name: localBangumi.value.official_title,
+      url: localBangumi.value.rss_link?.[0] || '',
+      aggregate: false,
+      parser: props.provider,
+      enabled: true,
+      connection_status: null,
+      last_checked_at: null,
+      last_error: null,
+    };
+    const resolved = await apiDownload.resolve(localBangumi.value, rss);
+    localBangumi.value.official_title = resolved.official_title;
+    localBangumi.value.year = resolved.year;
+    localBangumi.value.season = resolved.season;
+    if (resolved.poster_link) {
+      localBangumi.value.poster_link = resolved.poster_link;
+    }
+  } catch (e) {
+    console.error('Failed to resolve TMDB/TVDB metadata:', e);
+  } finally {
+    resolvingMetadata.value = false;
+  }
+}
 
 // Offset mismatch detection state
 const showOffsetDialog = ref(false);
@@ -76,6 +114,13 @@ async function detectOffsetMismatch() {
   }
 }
 
+async function initialize() {
+  // Resolve first: a tmdb-sourced result can have its season corrected by
+  // TMDB, and offset detection should check against that corrected value.
+  await resolveMetadata();
+  await detectOffsetMismatch();
+}
+
 // Handle offset dialog apply
 function handleOffsetApply(offsets: {
   seasonOffset: number;
@@ -98,7 +143,7 @@ function handleOffsetCancel() {
 
 // Run detection on mount
 onMounted(() => {
-  detectOffsetMismatch();
+  initialize();
 });
 
 // Info tags for display (just values, no labels)
@@ -190,7 +235,8 @@ function handleConfirm() {
             </template>
             <template v-else>
               <div class="poster-placeholder">
-                <ErrorPicture theme="outline" size="32" />
+                <NSpin v-if="resolvingMetadata" :size="20" />
+                <ErrorPicture v-else theme="outline" size="32" />
               </div>
             </template>
           </div>
@@ -201,6 +247,9 @@ function handleConfirm() {
             </p>
             <p v-if="localBangumi.year" class="bangumi-year">
               {{ localBangumi.year }}
+            </p>
+            <p v-else-if="resolvingMetadata" class="bangumi-year">
+              {{ $t('search.confirm.resolving') }}
             </p>
           </div>
         </div>
@@ -307,7 +356,11 @@ function handleConfirm() {
         <ab-button @click="emit('cancel')">
           {{ $t('common.cancel') }}
         </ab-button>
-        <ab-button variant="primary" @click="handleConfirm">
+        <ab-button
+          variant="primary"
+          :disabled="resolvingMetadata"
+          @click="handleConfirm"
+        >
           {{ $t('search.confirm.subscribe') }}
         </ab-button>
       </footer>

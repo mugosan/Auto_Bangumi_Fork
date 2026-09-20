@@ -1,8 +1,10 @@
 import logging
+from dataclasses import dataclass
 
 from module.conf import settings
 from module.database import Database
 from module.downloader import AddResult, DownloadClient
+from module.downloader.path import gen_save_path
 from module.models import Bangumi, ResponseModel
 from module.network import RequestContent
 from module.parser import TitleParser
@@ -37,6 +39,155 @@ async def _ensure_bangumi_id(db: Database, data: Bangumi) -> bool:
     elif data.id is not None and await db.bangumi.search_id(data.id) is None:
         data.id = None  # type: ignore[assignment]
     return False
+
+
+async def resolve_search_metadata(data: Bangumi, parser: str) -> Bangumi:
+    """Run the same TMDB/TVDB cross-reference subscribe_season persists, but
+    without saving anything -- lets the search UI preview resolved metadata
+    (year, poster, tvdb_id) once a specific torrent/source is picked, before
+    the user commits to Subscribe. Mirrors what Add RSS -> Analyze already
+    shows for that flow. A no-op if `data` is already resolved.
+
+    parser=="mikan" gets year/tvdb_id/id_source filled in too (mikan's own
+    homepage scrape never provides those), but keeps its own
+    official_title/season -- Mikan's scrape is more reliable for those than
+    a TMDB text search, and overwriting season with TMDB's own guess is a
+    plausible cause of separate season-mislabeling reports.
+    """
+    if parser in ("tmdb", "mikan") and data.tvdb_id is None:
+        try:
+            (
+                official_title,
+                season,
+                year,
+                poster_link,
+                meta_id,
+                id_source,
+            ) = await TitleParser.tmdb_parser(
+                data.official_title,
+                data.season,
+                settings.rss_parser.language,
+                episode_type=data.episode_type,
+            )
+        except Exception as e:
+            logger.warning(f"TMDB cross-reference failed for search result: {e}")
+        else:
+            if parser == "tmdb":
+                data.official_title = official_title
+                data.season = season
+                if poster_link:
+                    data.poster_link = poster_link
+            data.year = year
+            data.tvdb_id = meta_id
+            data.id_source = id_source
+    return data
+
+
+@dataclass(frozen=True, slots=True)
+class ReparseResult:
+    """What changed when re-running the TMDB/TVDB parser on an existing
+    bangumi -- surfaced to the UI so a "fix the folder" action explains
+    itself instead of silently moving files."""
+
+    old_official_title: str
+    new_official_title: str
+    old_year: str | None
+    new_year: str | None
+    old_tvdb_id: int | None
+    new_tvdb_id: int | None
+    old_id_source: str | None
+    new_id_source: str | None
+    old_folder: str
+    new_folder: str
+    folder_changed: bool
+    torrents_moved: int
+    torrents_failed: int
+
+
+async def reparse_bangumi(
+    db: Database, client: DownloadClient, bangumi_id: int
+) -> ReparseResult | None:
+    """Re-run the TMDB/TVDB parser for an existing bangumi (e.g. one
+    subscribed before the search-subscribe TMDB fix, or added with only a
+    bare title) and move its already-downloaded torrents into the corrected
+    folder.
+
+    Deliberately does not touch `season` -- same reasoning as
+    resolve_search_metadata's mikan branch: overwriting the season a
+    release was actually organized under with TMDB's own guess at the
+    "current" season is a plausible cause of season-mislabeling, and this
+    action's whole point is to fix organization, not risk repeating that
+    bug. Deliberately does not rename individual files either -- only which
+    folder they live in; per-file names are the periodic rename loop's job
+    (or a manual cleanup pass for files renamed before a naming fix).
+    """
+    bangumi = await db.bangumi.search_id(bangumi_id)
+    if bangumi is None:
+        return None
+
+    old_folder = gen_save_path(bangumi)
+    old_official_title = bangumi.official_title
+    old_year = bangumi.year
+    old_tvdb_id = bangumi.tvdb_id
+    old_id_source = bangumi.id_source
+
+    (
+        official_title,
+        _season,
+        year,
+        poster_link,
+        meta_id,
+        id_source,
+    ) = await TitleParser.tmdb_parser(
+        bangumi.official_title,
+        bangumi.season,
+        settings.rss_parser.language,
+        episode_type=bangumi.episode_type,
+    )
+    bangumi.official_title = official_title
+    bangumi.year = year
+    if poster_link:
+        bangumi.poster_link = poster_link
+    bangumi.tvdb_id = meta_id
+    bangumi.id_source = id_source
+
+    new_folder = gen_save_path(bangumi)
+    bangumi.save_path = new_folder
+    await db.bangumi.update(bangumi)
+
+    folder_changed = old_folder != new_folder
+    torrents_moved = 0
+    torrents_failed = 0
+    if folder_changed:
+        torrents = await db.torrent.search_by_bangumi_id(bangumi_id)
+        for torrent in torrents:
+            if not torrent.qb_hash:
+                continue
+            try:
+                await client.move_torrent(torrent.qb_hash, new_folder)
+                torrents_moved += 1
+            except Exception as e:
+                logger.warning(
+                    f"Failed to move torrent {torrent.qb_hash} during "
+                    f"reparse of bangumi {bangumi_id}: {e}"
+                )
+                torrents_failed += 1
+
+    return ReparseResult(
+        old_official_title=old_official_title,
+        new_official_title=official_title,
+        old_year=old_year,
+        new_year=year,
+        old_tvdb_id=old_tvdb_id,
+        new_tvdb_id=meta_id,
+        old_id_source=old_id_source,
+        new_id_source=id_source,
+        old_folder=old_folder,
+        new_folder=new_folder,
+        folder_changed=folder_changed,
+        torrents_moved=torrents_moved,
+        torrents_failed=torrents_failed,
+    )
 
 
 class SeasonCollector:
@@ -115,28 +266,9 @@ class SeasonCollector:
         # a bangumi with no year/tvdb_id/id_source forever. Resolve it
         # here, once, before it's ever written -- harmless no-op for a
         # bangumi that already resolved (e.g. via the Add-RSS analysis
-        # flow, which does call the full parser).
-        if parser == "tmdb" and data.tvdb_id is None:
-            (
-                official_title,
-                season,
-                year,
-                poster_link,
-                meta_id,
-                id_source,
-            ) = await TitleParser.tmdb_parser(
-                data.official_title,
-                data.season,
-                settings.rss_parser.language,
-                episode_type=data.episode_type,
-            )
-            data.official_title = official_title
-            data.season = season
-            data.year = year
-            if poster_link:
-                data.poster_link = poster_link
-            data.tvdb_id = meta_id
-            data.id_source = id_source
+        # flow, which does call the full parser, or the /rss/resolve
+        # preview the search UI calls before the user even gets here).
+        data = await resolve_search_metadata(data, parser)
 
         async with Database() as db:
             engine = RSSEngine(db)

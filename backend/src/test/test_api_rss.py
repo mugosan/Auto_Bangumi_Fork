@@ -465,3 +465,75 @@ class TestSubscribe:
         assert response.status_code == 200
         assert mock_subscribe.await_args is not None
         assert mock_subscribe.await_args.kwargs["parser"] == "mikan"
+
+
+# ---------------------------------------------------------------------------
+# POST /rss/resolve
+# ---------------------------------------------------------------------------
+
+
+class TestResolve:
+    def test_resolve_returns_resolved_bangumi_without_persisting(self, authed_client):
+        """POST /rss/resolve previews TMDB/TVDB metadata for a search
+        result, using the same site-name -> parser mapping as /subscribe,
+        without calling subscribe_season (nothing is persisted)."""
+        resolved = make_bangumi(
+            id=None, official_title="Resolved Title", year="2019", tvdb_id=359274
+        )
+        with (
+            patch(
+                "module.api.rss.resolve_search_metadata",
+                new_callable=AsyncMock,
+                return_value=resolved,
+            ) as mock_resolve,
+            patch(
+                "module.api.rss.SeasonCollector.subscribe_season",
+                new_callable=AsyncMock,
+            ) as mock_subscribe,
+        ):
+            response = authed_client.post(
+                "/api/v1/rss/resolve",
+                json={
+                    "data": make_bangumi(
+                        id=None, official_title="Search Title"
+                    ).model_dump(),
+                    "rss": {"url": "https://nyaa.si/?page=rss&q=x", "parser": "tmdb"},
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["official_title"] == "Resolved Title"
+        assert response.json()["year"] == "2019"
+        assert response.json()["tvdb_id"] == 359274
+        mock_resolve.assert_awaited_once()
+        mock_subscribe.assert_not_awaited()
+
+    def test_resolve_maps_site_name_to_provider_parser(self, authed_client):
+        """A site name (e.g. nyaa) is mapped to its configured parser type,
+        same as /subscribe (#1053)."""
+        providers = {
+            "mikan": {
+                "url": "https://mikanani.me/RSS/Search?searchstr=%s",
+                "parser": "mikan",
+            },
+            "nyaa": {"url": "https://nyaa.si/?page=rss&q=%s", "parser": "tmdb"},
+        }
+        with (
+            patch(
+                "module.api.rss.resolve_search_metadata",
+                new_callable=AsyncMock,
+                return_value=make_bangumi(id=None),
+            ) as mock_resolve,
+            patch("module.api.rss.get_provider", return_value=providers),
+        ):
+            response = authed_client.post(
+                "/api/v1/rss/resolve",
+                json={
+                    "data": make_bangumi(id=None).model_dump(),
+                    "rss": {"url": "https://nyaa.si/?page=rss&q=x", "parser": "nyaa"},
+                },
+            )
+
+        assert response.status_code == 200
+        assert mock_resolve.await_args is not None
+        assert mock_resolve.await_args.kwargs["parser"] == "tmdb"

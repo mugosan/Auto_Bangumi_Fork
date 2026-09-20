@@ -212,9 +212,20 @@
     }
   },
   "manual_import": {
-    "open_button": "导入种子",
-    "title": "导入种子",
+    "open_button": "导入文件",
+    "title": "导入文件",
+    "mode_torrent": "从下载器",
+    "mode_folder": "从文件夹路径",
+    "mode_upload": "上传 .torrent 文件",
     "pick_hint": "直接在下载器中添加的种子（不是通过订阅或搜索/合集添加的），可以在这里整理进你的媒体库。",
+    "folder_hint": "指定一个 AutoBangumi 自身进程可以访问的文件夹路径（需挂载到容器/主机内，不一定是你的桌面），系统会递归扫描其中的视频/字幕文件。",
+    "folder_path": "文件夹路径",
+    "folder_path_placeholder": "/downloads/some-folder",
+    "folder_path_required": "请先输入文件夹路径。",
+    "upload_hint": "直接上传一个 .torrent 文件——会被添加到你的下载器，然后走和其他方式一样的番剧名称/季度、预览、确认流程。",
+    "upload_file": "种子文件",
+    "upload_file_required": "请先选择一个 .torrent 文件。",
+    "upload_failed": "无法把这个 .torrent 文件添加到下载器。",
     "no_candidates": "没有找到未托管的种子。",
     "torrent_name": "种子",
     "size": "大小",
@@ -234,8 +245,8 @@
     "done": "完成",
     "load_failed": "无法从下载器获取种子列表。",
     "title_required": "请先输入番剧名称。",
-    "preview_failed": "无法为该种子生成预览。",
-    "apply_failed": "无法移动/重命名该种子的文件。"
+    "preview_failed": "无法生成预览。",
+    "apply_failed": "无法移动/重命名文件。"
   },
   "homepage": {
     "load_failed": {
@@ -291,7 +302,10 @@
       "season": "季度",
       "year": "年份",
       "yes_btn": "是",
-      "view_torrents": "查看种子"
+      "view_torrents": "查看种子",
+      "reparse": "重新解析",
+      "reparse_confirm_title": "重新解析该番剧？",
+      "reparse_confirm_body": "会重新运行 TMDB/TVDB 解析，如果标题/年份/ID 有变化，会把已下载的种子移动到修正后的文件夹。不会修改季度，也不会重命名单个文件。"
     },
     "others": {
       "title": "未匹配种子"
@@ -539,6 +553,7 @@
       "next": "下一步",
       "previous": "上一步",
       "skip": "跳过",
+      "cancel": "取消",
       "step": "第 {current} 步，共 {total} 步"
     }
   },
@@ -628,7 +643,8 @@
       "save_path": "保存路径",
       "save_path_placeholder": "留空使用默认路径",
       "advanced": "高级设置",
-      "subscribe": "确认订阅"
+      "subscribe": "确认订阅",
+      "resolving": "正在解析元数据…"
     }
   },
   "access": {
