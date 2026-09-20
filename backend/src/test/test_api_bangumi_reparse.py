@@ -26,8 +26,9 @@ _MOVED_RESULT = ReparseResult(
     new_id_source="tvdb",
     old_folder="/downloads/Wrong Title/Season 1",
     new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
-    folder_changed=True,
+    metadata_changed=True,
     torrents_found=2,
+    torrents_already_correct=0,
     torrents_moved=2,
     torrents_failed=0,
 )
@@ -67,7 +68,11 @@ class TestReparseRoute:
 
         assert response.status_code == 404
 
-    def test_reparse_already_correct_reports_no_move(self, authed_client):
+    def test_reparse_all_torrents_already_correct(self, authed_client):
+        """Regression for #1044: metadata being unchanged is no longer what
+        this branch reports on -- it's specifically "every tracked torrent's
+        actual save_path already matches", which the route can only know
+        from torrents_already_correct/torrents_found, not metadata_changed."""
         result = ReparseResult(
             old_official_title="Correct Title",
             new_official_title="Correct Title",
@@ -79,8 +84,9 @@ class TestReparseRoute:
             new_id_source="tvdb",
             old_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
             new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
-            folder_changed=False,
-            torrents_found=0,
+            metadata_changed=False,
+            torrents_found=1,
+            torrents_already_correct=1,
             torrents_moved=0,
             torrents_failed=0,
         )
@@ -97,7 +103,44 @@ class TestReparseRoute:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] is True
-        assert "already correct" in body["msg_en"]
+        assert "already" in body["msg_en"]
+
+    def test_reparse_metadata_unchanged_but_torrent_still_moved(self, authed_client):
+        """The exact bug fixed: metadata_changed=False must NOT stop reparse
+        from moving a torrent whose actual save_path differs from the target
+        folder (the DB's metadata was already correct, but the files never
+        were moved to match)."""
+        result = ReparseResult(
+            old_official_title="Correct Title",
+            new_official_title="Correct Title",
+            old_year="2019",
+            new_year="2019",
+            old_tvdb_id=359274,
+            new_tvdb_id=359274,
+            old_id_source="tvdb",
+            new_id_source="tvdb",
+            old_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
+            new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
+            metadata_changed=False,
+            torrents_found=1,
+            torrents_already_correct=0,
+            torrents_moved=1,
+            torrents_failed=0,
+        )
+        patcher = _patch_download_client(AsyncMock())
+        try:
+            with patch(
+                "module.api.bangumi.reparse_bangumi",
+                AsyncMock(return_value=result),
+            ):
+                response = authed_client.post("/api/v1/bangumi/reparse/1")
+        finally:
+            patcher.stop()
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] is True
+        assert "Moved 1 of 1" in body["msg_en"]
 
     def test_reparse_partial_failure_reports_status_false(self, authed_client):
         result = ReparseResult(
@@ -111,8 +154,9 @@ class TestReparseRoute:
             new_id_source="tvdb",
             old_folder="/downloads/Wrong Title/Season 1",
             new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
-            folder_changed=True,
+            metadata_changed=True,
             torrents_found=2,
+            torrents_already_correct=0,
             torrents_moved=1,
             torrents_failed=1,
         )
@@ -131,10 +175,9 @@ class TestReparseRoute:
         assert body["status"] is False
 
     def test_reparse_no_torrents_found_explains_why_nothing_moved(self, authed_client):
-        """The exact symptom reported in production: folder_changed is True
-        (TMDB resolution worked) but nothing is tracked for this bangumi, so
-        0 moved -- the message must say why instead of looking like a
-        silent no-op."""
+        """folder metadata resolved fine, but nothing is tracked for this
+        bangumi anywhere -- the message must say why instead of looking
+        like a silent no-op."""
         result = ReparseResult(
             old_official_title="Wrong Title",
             new_official_title="Correct Title",
@@ -146,8 +189,9 @@ class TestReparseRoute:
             new_id_source="tvdb",
             old_folder="/downloads/Wrong Title/Season 1",
             new_folder="/downloads/Correct Title (2019) [tvdb-359274]/Season 1",
-            folder_changed=True,
+            metadata_changed=True,
             torrents_found=0,
+            torrents_already_correct=0,
             torrents_moved=0,
             torrents_failed=0,
         )

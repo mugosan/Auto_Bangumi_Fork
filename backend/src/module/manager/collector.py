@@ -99,8 +99,9 @@ class ReparseResult:
     new_id_source: str | None
     old_folder: str
     new_folder: str
-    folder_changed: bool
+    metadata_changed: bool
     torrents_found: int
+    torrents_already_correct: int
     torrents_moved: int
     torrents_failed: int
 
@@ -121,6 +122,17 @@ async def reparse_bangumi(
     bug. Deliberately does not rename individual files either -- only which
     folder they live in; per-file names are the periodic rename loop's job
     (or a manual cleanup pass for files renamed before a naming fix).
+
+    Always checks each tracked torrent's *actual* current save_path against
+    the freshly-computed folder, rather than short-circuiting on whether
+    official_title/year/tvdb_id textually changed. Nothing in this codebase
+    persists Bangumi.save_path back to the DB after a normal download, so
+    it's always blank in practice; comparing two gen_save_path() calls
+    against each other (before vs after re-resolution) says nothing about
+    where files actually are -- if the metadata was already correct for any
+    reason (partial earlier fix, drift) while the files were never moved to
+    match, that comparison wrongly reports "already correct" and silently
+    does nothing (#1044).
     """
     bangumi = await db.bangumi.search_id(bangumi_id)
     if bangumi is None:
@@ -156,22 +168,23 @@ async def reparse_bangumi(
     bangumi.save_path = new_folder
     await db.bangumi.update(bangumi)
 
-    folder_changed = old_folder != new_folder
-    hashes: set[str] = set()
+    torrent_paths = await _find_torrent_paths(db, client, bangumi_id)
+    torrents_already_correct = 0
     torrents_moved = 0
     torrents_failed = 0
-    if folder_changed:
-        hashes = await _find_torrent_hashes(db, client, bangumi_id)
-        for torrent_hash in hashes:
-            try:
-                await client.move_torrent(torrent_hash, new_folder)
-                torrents_moved += 1
-            except Exception as e:
-                logger.warning(
-                    f"Failed to move torrent {torrent_hash} during "
-                    f"reparse of bangumi {bangumi_id}: {e}"
-                )
-                torrents_failed += 1
+    for torrent_hash, current_path in torrent_paths.items():
+        if current_path == new_folder:
+            torrents_already_correct += 1
+            continue
+        try:
+            await client.move_torrent(torrent_hash, new_folder)
+            torrents_moved += 1
+        except Exception as e:
+            logger.warning(
+                f"Failed to move torrent {torrent_hash} during "
+                f"reparse of bangumi {bangumi_id}: {e}"
+            )
+            torrents_failed += 1
 
     return ReparseResult(
         old_official_title=old_official_title,
@@ -184,35 +197,49 @@ async def reparse_bangumi(
         new_id_source=id_source,
         old_folder=old_folder,
         new_folder=new_folder,
-        folder_changed=folder_changed,
-        torrents_found=len(hashes),
+        metadata_changed=old_folder != new_folder,
+        torrents_found=len(torrent_paths),
+        torrents_already_correct=torrents_already_correct,
         torrents_moved=torrents_moved,
         torrents_failed=torrents_failed,
     )
 
 
-async def _find_torrent_hashes(
+async def _find_torrent_paths(
     db: Database, client: DownloadClient, bangumi_id: int
-) -> set[str]:
-    """Every torrent hash associated with a bangumi, from both sources this
-    codebase uses for that link (see renamer.py's _lookup_offsets, which
-    faces the identical problem): the Torrent table's bangumi_id FK, and the
-    downloader's own "ab:<id>" tag. A bangumi whose folder needs reparsing/
-    fixing is exactly the kind whose DB bookkeeping may be inconsistent --
-    relying on the FK alone silently finds nothing to move for such a
-    bangumi even though the downloader still knows exactly which torrents
-    are its via the tag.
+) -> dict[str, str]:
+    """Every torrent hash associated with a bangumi, mapped to its current
+    save_path as the downloader reports it (ground truth for "where are the
+    files right now", unlike anything derived from stored metadata).
+
+    Hashes come from both sources this codebase uses for the bangumi link
+    (see renamer.py's _lookup_offsets, which faces the identical problem):
+    the Torrent table's bangumi_id FK, and the downloader's own "ab:<id>"
+    tag. A bangumi whose folder needs fixing is exactly the kind whose DB
+    bookkeeping may be inconsistent -- relying on the FK alone can miss
+    torrents the downloader still knows are this bangumi's via the tag.
     """
-    hashes = {
+    db_hashes = {
         t.qb_hash
         for t in await db.torrent.search_by_bangumi_id(bangumi_id)
         if t.qb_hash
     }
-    tagged = await client.get_torrent_info(
-        category=None, status_filter=None, tag=f"ab:{bangumi_id}"
+    all_infos = await client.get_torrent_info(
+        category=None, status_filter=None, tag=None
     )
-    hashes.update(info["hash"] for info in tagged if info.get("hash"))
-    return hashes
+    by_hash = {info["hash"]: info for info in all_infos if info.get("hash")}
+    tag = f"ab:{bangumi_id}"
+
+    paths: dict[str, str] = {}
+    for torrent_hash in db_hashes:
+        info = by_hash.get(torrent_hash)
+        if info is not None:
+            paths[torrent_hash] = info.get("save_path", "")
+    for torrent_hash, info in by_hash.items():
+        tags = (info.get("tags") or "").split(",")
+        if any(t.strip() == tag for t in tags):
+            paths[torrent_hash] = info.get("save_path", "")
+    return paths
 
 
 class SeasonCollector:

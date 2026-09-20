@@ -313,21 +313,6 @@ async def reparse_rule(bangumi_id: int, db: Database = Depends(get_db)):
                 "msg_zh": f"未找到番剧 {bangumi_id}。",
             },
         )
-    if not result.folder_changed:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": True,
-                "msg_en": (
-                    f'Refreshed as "{result.new_official_title}" '
-                    f"({result.new_year or 'unknown year'}); folder was already correct."
-                ),
-                "msg_zh": (
-                    f"已刷新为「{result.new_official_title}」"
-                    f"（{result.new_year or '年份未知'}）；文件夹路径本就正确。"
-                ),
-            },
-        )
     if result.torrents_found == 0:
         detail_en = (
             f"No tracked torrents found for this bangumi -- nothing to move. "
@@ -336,6 +321,15 @@ async def reparse_rule(bangumi_id: int, db: Database = Depends(get_db)):
         detail_zh = (
             f"没有找到与该番剧关联的种子，无需移动。"
             f"其文件可能需要手动移动到 {result.new_folder}。"
+        )
+    elif result.torrents_moved == 0 and result.torrents_failed == 0:
+        detail_en = (
+            f"All {result.torrents_found} tracked torrent(s) are already in "
+            f"{result.new_folder} -- nothing to move."
+        )
+        detail_zh = (
+            f"已跟踪的 {result.torrents_found} 个种子都已在 "
+            f"{result.new_folder} 中，无需移动。"
         )
     else:
         detail_en = (
@@ -346,6 +340,9 @@ async def reparse_rule(bangumi_id: int, db: Database = Depends(get_db)):
             f"已将 {result.torrents_moved}/{result.torrents_found} "
             f"个种子移动到 {result.new_folder}"
         )
+        if result.torrents_already_correct:
+            detail_en += f" ({result.torrents_already_correct} already there)"
+            detail_zh += f"（{result.torrents_already_correct} 个已在目标位置）"
         if result.torrents_failed:
             detail_en += f" ({result.torrents_failed} failed)."
             detail_zh += f"（{result.torrents_failed} 个失败）。"
