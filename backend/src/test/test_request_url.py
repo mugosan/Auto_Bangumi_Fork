@@ -17,14 +17,17 @@ from module.network.request_url import (
 
 @pytest.fixture(autouse=True)
 async def _clean_shared_client():
-    """Ensure shared client is reset after each test."""
-    yield
-    import module.network.request_url as mod
+    """Ensure shared client is reset after each test.
 
-    if mod._shared_client is not None:
-        await mod._shared_client.aclose()
-        mod._shared_client = None
-        mod._shared_client_proxy_key = None
+    Goes through reset_shared_client() rather than closing
+    module._shared_client directly: a client left over from some other
+    test's event loop (pytest-asyncio gives each async test its own loop by
+    default) can't be closed from a different loop, and reset_shared_client()
+    already knows to just drop the reference in that case instead of raising
+    "Event loop is closed" (#1042 CI flake).
+    """
+    yield
+    await reset_shared_client()
 
 
 class TestSharedClientLimits:

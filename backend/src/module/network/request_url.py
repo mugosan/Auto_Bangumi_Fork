@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 # Module-level shared client for connection reuse
 _shared_client: httpx.AsyncClient | None = None
 _shared_client_proxy_key: str | None = None
+# Which running loop _shared_client was created on. httpx.AsyncClient's
+# transport captures the loop at connection time; reusing it from a
+# different loop (the loop that made it was already closed) blows up with
+# "Event loop is closed" on the next request or even just .aclose() -- most
+# visibly under pytest-asyncio, where each async test gets its own loop by
+# default, but the same failure mode is possible any time this module
+# outlives a loop restart.
+_shared_client_loop: asyncio.AbstractEventLoop | None = None
 
 # RSS 循环间隔 900s， 远超服务端 keep-alive 超时（60-120s）
 # keepalive_expiry=60 让空闲连接在过期前主动丢弃，避免复用过期连接
@@ -51,12 +59,21 @@ def _proxy_config_key() -> str:
 
 
 async def get_shared_client() -> httpx.AsyncClient:
-    global _shared_client, _shared_client_proxy_key
+    global _shared_client, _shared_client_proxy_key, _shared_client_loop
     current_key = _proxy_config_key()
-    if _shared_client is not None and _shared_client_proxy_key == current_key:
+    current_loop = asyncio.get_running_loop()
+    if (
+        _shared_client is not None
+        and _shared_client_proxy_key == current_key
+        and _shared_client_loop is current_loop
+    ):
         return _shared_client
     if _shared_client is not None:
-        await _shared_client.aclose()
+        if _shared_client_loop is current_loop:
+            await _shared_client.aclose()
+        # else: bound to a different (by now almost certainly closed) loop --
+        # can't safely operate on it from here. Its loop tearing down already
+        # released the underlying sockets; just drop the reference.
     timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
     # follow_redirects=True: Mikan mirrors and some CDNs respond with 302 to the
     # canonical host; without this, raise_for_status treats the redirect as an
@@ -85,16 +102,18 @@ async def get_shared_client() -> httpx.AsyncClient:
     else:
         _shared_client = httpx.AsyncClient(**common_kwargs)
     _shared_client_proxy_key = current_key
+    _shared_client_loop = current_loop
     return _shared_client
 
 
 async def reset_shared_client():
     """关闭并清除共享客户端，下次请求时自动创建新连接池。"""
-    global _shared_client, _shared_client_proxy_key
-    if _shared_client is not None:
+    global _shared_client, _shared_client_proxy_key, _shared_client_loop
+    if _shared_client is not None and _shared_client_loop is asyncio.get_running_loop():
         await _shared_client.aclose()
     _shared_client = None
     _shared_client_proxy_key = None
+    _shared_client_loop = None
 
 
 class RequestURL:
