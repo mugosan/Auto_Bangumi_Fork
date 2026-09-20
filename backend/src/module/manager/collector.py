@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from module.conf import settings
 from module.database import Database
@@ -104,6 +105,7 @@ class ReparseResult:
     torrents_already_correct: int
     torrents_moved: int
     torrents_failed: int
+    folders_removed: int
 
 
 async def reparse_bangumi(
@@ -172,6 +174,7 @@ async def reparse_bangumi(
     torrents_already_correct = 0
     torrents_moved = 0
     torrents_failed = 0
+    vacated_paths: set[str] = set()
     for torrent_hash, current_path in torrent_paths.items():
         if current_path == new_folder:
             torrents_already_correct += 1
@@ -185,6 +188,14 @@ async def reparse_bangumi(
                 f"reparse of bangumi {bangumi_id}: {e}"
             )
             torrents_failed += 1
+        else:
+            if current_path:
+                vacated_paths.add(current_path)
+
+    download_root = Path(settings.downloader.path)
+    folders_removed = 0
+    for vacated in vacated_paths:
+        folders_removed += _remove_empty_ancestors(Path(vacated), download_root)
 
     return ReparseResult(
         old_official_title=old_official_title,
@@ -202,7 +213,42 @@ async def reparse_bangumi(
         torrents_already_correct=torrents_already_correct,
         torrents_moved=torrents_moved,
         torrents_failed=torrents_failed,
+        folders_removed=folders_removed,
     )
+
+
+def _remove_empty_ancestors(path: Path, download_root: Path) -> int:
+    """Remove `path` and any now-empty parent directories left behind after
+    moving a torrent's content out, stopping at (and never removing)
+    `download_root` itself. Best-effort and silent: a directory that's
+    missing, non-empty (other files/torrents still in it), or blocked by a
+    permission error just stops the walk there -- moving the torrent already
+    succeeded, so a cleanup failure must never be reported as the action
+    itself failing. Returns how many directories were actually removed.
+    """
+    try:
+        resolved_root = download_root.resolve()
+    except OSError:
+        return 0
+
+    removed = 0
+    current = path
+    while True:
+        try:
+            resolved_current = current.resolve()
+        except OSError:
+            return removed
+        if (
+            resolved_current == resolved_root
+            or resolved_root not in resolved_current.parents
+        ):
+            return removed
+        try:
+            current.rmdir()
+        except OSError:
+            return removed
+        removed += 1
+        current = current.parent
 
 
 async def _find_torrent_paths(

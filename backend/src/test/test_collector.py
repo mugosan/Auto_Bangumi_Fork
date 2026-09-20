@@ -645,3 +645,205 @@ class TestReparseBangumi:
         assert result.torrents_found == 0
         assert result.torrents_moved == 0
         client.move_torrent.assert_not_awaited()
+
+    async def test_removes_now_empty_old_folder_after_moving(self, tmp_path):
+        """Reported: reparse moved the torrent but left the old, now-empty
+        show/season directory behind on disk."""
+        bangumi = make_bangumi(
+            filter="",
+            official_title="Wrong Title",
+            year=None,
+            tvdb_id=None,
+            season=1,
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        old_show_dir = tmp_path / "Wrong Title"
+        old_season_dir = old_show_dir / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_dir), "tags": ""}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_moved == 1
+        assert result.folders_removed == 2  # "Season 1", then "Wrong Title"
+        assert not old_season_dir.exists()
+        assert not old_show_dir.exists()
+        assert tmp_path.exists()  # download root itself is never removed
+
+    async def test_cleanup_never_removes_the_download_root(self, tmp_path):
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        # The torrent's old save_path *is* the download root -- nothing to
+        # walk up past, and the root itself must survive.
+        client = _client_with_all_torrents(
+            all_torrents=[{"hash": "abc123", "save_path": str(tmp_path), "tags": ""}]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.folders_removed == 0
+        assert tmp_path.exists()
+
+    async def test_cleanup_leaves_a_still_occupied_parent_alone(self, tmp_path):
+        """A sibling season folder (or any other file) still under the old
+        show directory must stop the walk-up -- only the emptied leaf goes."""
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        old_show_dir = tmp_path / "Wrong Title"
+        old_season_1 = old_show_dir / "Season 1"
+        old_season_2 = old_show_dir / "Season 2"
+        old_season_1.mkdir(parents=True)
+        old_season_2.mkdir(parents=True)  # sibling -- keeps "Wrong Title" occupied
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_1), "tags": ""}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.folders_removed == 1  # just "Season 1"
+        assert not old_season_1.exists()
+        assert old_show_dir.exists()  # "Wrong Title" survives -- Season 2 is in it
+        assert old_season_2.exists()
+
+    async def test_cleanup_tolerates_a_folder_two_torrents_already_shared(
+        self, tmp_path
+    ):
+        """Two torrents from the same old season folder: the second cleanup
+        attempt hits an already-removed directory and must not raise."""
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="hash1",
+                    bangumi_id=bangumi_id,
+                )
+            )
+            await db.torrent.add(
+                Torrent(
+                    name="ep2.mkv",
+                    url="https://example.com/ep2.torrent",
+                    qb_hash="hash2",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        old_show_dir = tmp_path / "Wrong Title"
+        old_season_dir = old_show_dir / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "hash1", "save_path": str(old_season_dir), "tags": ""},
+                {"hash": "hash2", "save_path": str(old_season_dir), "tags": ""},
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_moved == 2
+        # Same shared old path -- only removed (and counted) once.
+        assert result.folders_removed == 2
+        assert not old_show_dir.exists()

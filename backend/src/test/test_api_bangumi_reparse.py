@@ -31,6 +31,7 @@ _MOVED_RESULT = ReparseResult(
     torrents_already_correct=0,
     torrents_moved=2,
     torrents_failed=0,
+    folders_removed=0,
 )
 
 
@@ -89,6 +90,7 @@ class TestReparseRoute:
             torrents_already_correct=1,
             torrents_moved=0,
             torrents_failed=0,
+            folders_removed=0,
         )
         patcher = _patch_download_client(AsyncMock())
         try:
@@ -126,6 +128,7 @@ class TestReparseRoute:
             torrents_already_correct=0,
             torrents_moved=1,
             torrents_failed=0,
+            folders_removed=0,
         )
         patcher = _patch_download_client(AsyncMock())
         try:
@@ -159,6 +162,7 @@ class TestReparseRoute:
             torrents_already_correct=0,
             torrents_moved=1,
             torrents_failed=1,
+            folders_removed=0,
         )
         patcher = _patch_download_client(AsyncMock())
         try:
@@ -194,6 +198,7 @@ class TestReparseRoute:
             torrents_already_correct=0,
             torrents_moved=0,
             torrents_failed=0,
+            folders_removed=0,
         )
         patcher = _patch_download_client(AsyncMock())
         try:

@@ -349,6 +349,9 @@ async def reparse_rule(bangumi_id: int, db: Database = Depends(get_db)):
         else:
             detail_en += "."
             detail_zh += "。"
+        if result.folders_removed:
+            detail_en += f" Removed {result.folders_removed} now-empty folder(s)."
+            detail_zh += f" 已清理 {result.folders_removed} 个空文件夹。"
     return JSONResponse(
         status_code=200,
         content={
