@@ -109,7 +109,7 @@ def pick_season_by_air_date(
     within_range = {s: gap for s, gap in gaps.items() if gap <= max_gap_days}
     if not within_range:
         return None
-    best_season = min(within_range, key=within_range.get)
+    best_season = min(within_range, key=lambda s: within_range[s])
     best_gap = within_range[best_season]
     if any(
         season != best_season and gap == best_gap
