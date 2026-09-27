@@ -17,13 +17,23 @@ from module.database.bangumi import (
     normalize_save_path,
 )
 from module.downloader import DownloadClient, RenameOutcome, RenameResult
-from module.downloader.path import check_files, is_ep, path_to_bangumi
+from module.downloader.path import (
+    check_files,
+    is_ep,
+    path_to_bangumi,
+    sibling_season_save_path,
+)
 from module.models import EpisodeFile, Notification, RenameOperation, SubtitleFile
 from module.notification import RenameConflictEvent
 from module.parser import TitleParser
+from module.parser.analyser.season_resolver import (
+    pick_season_by_air_date,
+    resolve_episode_air_dates_by_season,
+)
 
 from .revision_policy import (
     RevisionIdentity,
+    find_fallback_season,
     is_strict_upgrade,
     parse_revision_identity,
     replacement_staged_path,
@@ -593,6 +603,287 @@ class Renamer:
                 )
             )
         return incoming_identity, owners
+
+    async def _season_occupancy(
+        self,
+        *,
+        bangumi_id: int,
+        below_season: int,
+        exclude_hash: str,
+        all_infos: list[dict],
+    ) -> dict[int, set[int | float]]:
+        """Map each season below `below_season` to the episode numbers this
+        bangumi already has a file for there, based on every other
+        downloader task tagged with `bangumi_id`. A season nobody has ever
+        downloaded through AutoBangumi simply doesn't appear in the result.
+        """
+        candidates_by_season: dict[int, list[dict]] = {}
+        for candidate in all_infos:
+            if candidate.get("hash") == exclude_hash:
+                continue
+            if self._parse_bangumi_id_from_tags(candidate.get("tags")) != bangumi_id:
+                continue
+            _, candidate_season = path_to_bangumi(
+                candidate.get("save_path", ""), candidate.get("name", "")
+            )
+            if not (1 <= candidate_season < below_season):
+                continue
+            candidates_by_season.setdefault(candidate_season, []).append(candidate)
+
+        flat = [c for group in candidates_by_season.values() for c in group]
+        all_files = await asyncio.gather(
+            *[self.client.get_torrent_files(c["hash"]) for c in flat]
+        )
+        files_by_hash = dict(zip((c["hash"] for c in flat), all_files))
+
+        occupied_by_season: dict[int, set[int | float]] = {}
+        for cand_season, candidates in candidates_by_season.items():
+            occupied: set[int | float] = set()
+            for candidate in candidates:
+                for f in files_by_hash[candidate["hash"]]:
+                    name = f.get("name", "")
+                    if not is_ep(name):
+                        continue
+                    parsed = self._parser.torrent_parser(
+                        torrent_name=candidate.get("name", ""),
+                        torrent_path=name,
+                        season=cand_season,
+                    )
+                    if parsed is not None and parsed.episode is not None:
+                        occupied.add(parsed.episode)
+            occupied_by_season[cand_season] = occupied
+        return occupied_by_season
+
+    async def _resolve_season_by_air_date(
+        self,
+        *,
+        bangumi_id: int,
+        torrent_hash: str,
+        season: int,
+        episode: int | float,
+    ) -> int | None:
+        """Use TMDB's real air dates to tell a genuine current-season
+        duplicate apart from an actually-earlier season's rerun -- real
+        evidence instead of a guess from occupancy alone.
+
+        Compares the RSS feed's own <pubDate> for this specific release
+        (stored on the matching Torrent row, keyed by qb_hash) against each
+        candidate season's TMDB air date for this exact episode number, and
+        returns whichever season's air date it lands closest to -- which
+        may well be the current season itself, confirming this really is a
+        duplicate and not a leak.
+
+        Returns None -- "inconclusive" -- whenever the evidence isn't
+        there: no pub_date on record (an older torrent added before this
+        was tracked, or a manual import), a fractional/special episode
+        number with no TMDB counterpart, no TMDB match for the show, or a
+        TMDB/network hiccup. Callers fall back to the occupancy-only
+        heuristic in all of these cases.
+        """
+        if episode != int(episode):
+            return None
+        try:
+            async with Database() as db:
+                torrent_record = await db.torrent.search_by_qb_hash(torrent_hash)
+                if torrent_record is None or torrent_record.pub_date is None:
+                    return None
+                bangumi = await db.bangumi.search_id(bangumi_id)
+            if bangumi is None or bangumi.deleted or not bangumi.official_title:
+                return None
+            air_dates = await resolve_episode_air_dates_by_season(
+                official_title=bangumi.official_title,
+                language=settings.rss_parser.language,
+                episode=int(episode),
+                seasons=list(range(1, season + 1)),
+            )
+            return pick_season_by_air_date(
+                pub_date=torrent_record.pub_date.date(),
+                air_dates_by_season=air_dates,
+            )
+        except Exception as e:
+            logger.debug(
+                "Air-date season resolution skipped for %s: %s", torrent_hash, e
+            )
+            return None
+
+    async def _try_correct_season_before_claim(
+        self,
+        *,
+        info: dict,
+        prepared: PreparedMediaRename,
+        bangumi_id: int,
+        season: int,
+    ) -> MediaRenameReport | None:
+        """Resolve this file's true season from TMDB air-date evidence
+        *before* it ever tries to claim a target filename.
+
+        This closes a race the conflict-time check alone can't: if a
+        leaked earlier-season file happens to be processed (and claim its
+        slot) before the genuine current-season file for the same episode
+        arrives, the genuine file would be the one stuck in conflict --
+        with nothing able to evict a claim that already succeeded.
+        Resolving up front instead means every file is independently
+        routed to its correct season regardless of processing order:
+        there's no shared slot to race over in the first place, since a
+        leaked file relocates away before it ever touches the current
+        season's target path.
+
+        Runs unconditionally for every not-yet-renamed single-file episode
+        of a multi-season bangumi (gated by `season_fallback_enabled`,
+        same as the conflict-time fallback) -- not just ones that happen
+        to collide. Cheap in the common case: TMDB results are cached, so
+        this is one cache hit after the first file of a batch, and the
+        overwhelming majority of episodes get no correction at all (their
+        air date confirms the season they're already in).
+        """
+        episode = prepared.episode.episode
+        resolved_season = await self._resolve_season_by_air_date(
+            bangumi_id=bangumi_id,
+            torrent_hash=info["hash"],
+            season=season,
+            episode=episode,
+        )
+        if resolved_season is None or resolved_season == season:
+            return None
+
+        new_save_path = sibling_season_save_path(
+            info.get("save_path", ""), resolved_season
+        )
+        if new_save_path == info.get("save_path", ""):
+            return None
+
+        logger.info(
+            "Relocating '%s' from Season %s to Season %s before renaming: "
+            "TMDB's air date for episode %s matches Season %s (resolved "
+            "before any naming conflict could occur).",
+            info.get("name", ""),
+            season,
+            resolved_season,
+            episode,
+            resolved_season,
+        )
+        await self.client.move_torrent(info["hash"], new_save_path)
+        return MediaRenameReport(
+            result=RenameResult(
+                RenameOutcome.RETRYABLE_FAILURE,
+                detail=f"relocated to Season {resolved_season}; renames next pass",
+            ),
+            prepared=prepared,
+        )
+
+    async def _try_relocate_to_earlier_season(
+        self,
+        *,
+        info: dict,
+        prepared: PreparedMediaRename,
+        season: int,
+        all_infos: list[dict],
+    ) -> MediaRenameReport | None:
+        """When this single-file torrent's canonical target is already held
+        by another release that isn't a strict upgrade of it, check whether
+        the file actually belongs to an earlier season instead of the one
+        it's currently defaulting to.
+
+        RSS matching a bangumi is by show name alone, so a release with no
+        season marker in its title -- a common style for some fansub
+        groups -- matches every season's subscription equally well and
+        silently inherits whatever season the bangumi is currently tracking
+        (see `torrent_parser`). A back-catalog rerun of an earlier season
+        showing up in that same feed collides with the current season's
+        already-organized episode of the same number, and would otherwise
+        sit held/un-renamed forever.
+
+        Tries TMDB air dates first (see `_resolve_season_by_air_date`) --
+        real evidence that can also *confirm* the current season and
+        correctly leave a genuine duplicate held, which occupancy alone
+        can never do. Only falls back to occupancy (a free slot in an
+        earlier season) when the air-date evidence is inconclusive, e.g.
+        this torrent predates pub_date tracking.
+
+        Only relocates the underlying download (`move_torrent`); it doesn't
+        rename the file itself. The next `rename()` pass re-derives the
+        season from the torrent's (now updated) save_path and renames it
+        through the ordinary path, exactly like any other new episode --
+        no special-cased rename logic is needed for that second step, and
+        it naturally retries if the move hasn't propagated yet.
+
+        Still a heuristic when air-date evidence is unavailable: a genuine
+        duplicate release of a *current*-season episode with no season tag
+        would then look identical to a leaked earlier-season episode, and
+        could be relocated too. `bangumi_manage.season_fallback_enabled`
+        (default on) is the escape hatch if that ever misfires for a feed
+        that predates pub_date tracking.
+        """
+        if season <= 1:
+            return None
+        bangumi_id = self._parse_bangumi_id_from_tags(info.get("tags"))
+        if bangumi_id is None:
+            return None
+        episode = prepared.episode.episode
+
+        date_resolved_season = await self._resolve_season_by_air_date(
+            bangumi_id=bangumi_id,
+            torrent_hash=info["hash"],
+            season=season,
+            episode=episode,
+        )
+        if date_resolved_season == season:
+            # Air dates confirm this really is the current season: a
+            # genuine duplicate release, not a leaked earlier one. Don't
+            # even consult occupancy -- let it hold like any other
+            # unresolved conflict.
+            return None
+
+        occupied_by_season = await self._season_occupancy(
+            bangumi_id=bangumi_id,
+            below_season=season,
+            exclude_hash=info["hash"],
+            all_infos=all_infos,
+        )
+        if date_resolved_season is not None:
+            fallback_season = (
+                date_resolved_season
+                if episode not in occupied_by_season.get(date_resolved_season, set())
+                else None
+            )
+        else:
+            fallback_season = find_fallback_season(
+                current_season=season,
+                episode=episode,
+                occupied_by_season=occupied_by_season,
+            )
+        if fallback_season is None:
+            return None
+
+        new_save_path = sibling_season_save_path(
+            info.get("save_path", ""), fallback_season
+        )
+        if new_save_path == info.get("save_path", ""):
+            return None
+
+        logger.info(
+            "Relocating '%s' from Season %s to Season %s: episode %s already "
+            "exists in Season %s and this release carries no season marker "
+            "(%s).",
+            info.get("name", ""),
+            season,
+            fallback_season,
+            episode,
+            season,
+            (
+                "confirmed by TMDB air date"
+                if date_resolved_season == fallback_season
+                else "likely an earlier-season rerun matched by show name alone"
+            ),
+        )
+        await self.client.move_torrent(info["hash"], new_save_path)
+        return MediaRenameReport(
+            result=RenameResult(
+                RenameOutcome.RETRYABLE_FAILURE,
+                detail=f"relocated to Season {fallback_season}; renames next pass",
+            ),
+            prepared=prepared,
+        )
 
     def _build_operation(
         self,
@@ -1359,6 +1650,22 @@ class Renamer:
             )
 
         incoming_id = self._parse_bangumi_id_from_tags(info.get("tags"))
+
+        if (
+            episode_type == "episode"
+            and season > 1
+            and incoming_id is not None
+            and settings.bangumi_manage.season_fallback_enabled
+        ):
+            relocated = await self._try_correct_season_before_claim(
+                info=info,
+                prepared=prepared,
+                bangumi_id=incoming_id,
+                season=season,
+            )
+            if relocated is not None:
+                return relocated
+
         identity = parse_revision_identity(
             info.get("name", ""),
             bangumi_id=incoming_id,
@@ -1493,6 +1800,19 @@ class Renamer:
 
             if len(owners) == 1:
                 assert owner is not None
+                if (
+                    len(files) == 1
+                    and len(owner.files) == 1
+                    and settings.bangumi_manage.season_fallback_enabled
+                ):
+                    relocated = await self._try_relocate_to_earlier_season(
+                        info=info,
+                        prepared=prepared,
+                        season=season,
+                        all_infos=all_infos,
+                    )
+                    if relocated is not None:
+                        return relocated
                 if len(files) != 1 or len(owner.files) != 1:
                     reason = "automatic replacement requires two single-file torrents"
                 elif incoming_identity is None or owner.identity is None:

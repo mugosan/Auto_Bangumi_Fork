@@ -78,6 +78,38 @@ def path_to_bangumi(save_path: PathLike[str] | str, torrent_name: str = ""):
     return bangumi_name, season
 
 
+_SEASON_DIR_RE = re.compile(r"^(?:S\d+|[Ss]eason \d+)$")
+
+
+def sibling_season_save_path(save_path: PathLike[str] | str, new_season: int) -> str:
+    """Swap the trailing "Season N" component of a save_path for another season,
+    keeping the same show folder and everything above it.
+
+    Used to relocate a torrent whose canonical target collided with an
+    already-organized episode in the currently tracked season, on the theory
+    that it actually belongs to an earlier season of the same show (RSS
+    matching is by show name only, so an untagged rerun matches a later
+    season's subscription just as well as a real new episode does).
+
+    Returns `save_path` unchanged if no "Season N" component is found (e.g.
+    a movie's flat layout), since there's nothing to swap.
+
+    Splits on separators with a plain regex rather than round-tripping
+    through PureWindowsPath/Path: reparsing a path already anchored at "/"
+    through PureWindowsPath and rebuilding it with the platform's own Path
+    mangles the leading separator (its Windows root marker isn't a real
+    component elsewhere), whereas a straight string split preserves
+    whatever separator style the input already used.
+    """
+    text = str(save_path)
+    segments = re.split(r"([/\\])", text)
+    for i, segment in enumerate(segments):
+        if _SEASON_DIR_RE.match(segment):
+            segments[i] = f"Season {new_season}"
+            return "".join(segments)
+    return text
+
+
 def file_depth(file_path: PathLike[str] | str):
     return len(Path(file_path).parts)
 

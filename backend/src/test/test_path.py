@@ -10,6 +10,7 @@ from module.downloader.path import (
     path_to_bangumi,
     rule_name,
     sanitize_path_fragment,
+    sibling_season_save_path,
 )
 from test.factories import make_bangumi
 
@@ -358,6 +359,42 @@ class TestPathToBangumi:
             )
 
         assert name == "My Anime (2024)"
+
+
+# ---------------------------------------------------------------------------
+# sibling_season_save_path
+# ---------------------------------------------------------------------------
+
+
+class TestSiblingSeasonSavePath:
+    def test_swaps_season_component(self):
+        assert (
+            sibling_season_save_path("/downloads/Bangumi/My Anime (2024)/Season 2", 1)
+            == "/downloads/Bangumi/My Anime (2024)/Season 1"
+        )
+
+    def test_swaps_s_prefix_component(self):
+        assert (
+            sibling_season_save_path("/downloads/Bangumi/Anime/S03", 1)
+            == "/downloads/Bangumi/Anime/Season 1"
+        )
+
+    def test_keeps_id_tagged_folder_name_intact(self):
+        assert (
+            sibling_season_save_path(
+                "/downloads/Bangumi/My Anime (2024) [tvdb-457532]/Season 2", 1
+            )
+            == "/downloads/Bangumi/My Anime (2024) [tvdb-457532]/Season 1"
+        )
+
+    def test_no_season_component_returns_unchanged(self):
+        """Movie layout has no "Season N" folder -- nothing to swap."""
+        path = "/downloads/Bangumi/天气之子 (2019)"
+        assert sibling_season_save_path(path, 1) == path
+
+    def test_same_season_is_a_no_op(self):
+        path = "/downloads/Bangumi/My Anime (2024)/Season 2"
+        assert sibling_season_save_path(path, 2) == path
 
 
 # ---------------------------------------------------------------------------

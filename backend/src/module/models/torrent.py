@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
@@ -17,6 +18,11 @@ class Torrent(SQLModel, table=True):
     homepage: Optional[str] = Field(None, alias="homepage")
     downloaded: bool = Field(False, alias="downloaded")
     qb_hash: Optional[str] = Field(None, alias="qb_hash", index=True)
+    # The RSS item's own <pubDate>, not when we downloaded it -- lets a
+    # rename conflict distinguish a genuine same-season duplicate release
+    # from an actually-older season's rerun leaking into the feed under
+    # the same show name (see module.parser.analyser.season_resolver).
+    pub_date: Optional[datetime] = Field(None, alias="pub_date")
 
 
 class TorrentUpdate(SQLModel):

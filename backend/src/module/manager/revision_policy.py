@@ -91,6 +91,42 @@ def same_release_identity(old: RevisionIdentity, new: RevisionIdentity) -> bool:
     )
 
 
+def find_fallback_season(
+    *,
+    current_season: int,
+    episode: int | float,
+    occupied_by_season: dict[int, set[int | float]],
+    min_season: int = 1,
+) -> int | None:
+    """Guess which earlier season an untagged, colliding release actually
+    belongs to, given what's already known to occupy each earlier season.
+
+    Only ever consulted once a same-season conflict already exists (the
+    current season's slot for `episode` is taken by another release that
+    isn't a strict upgrade of it) -- it never changes behaviour for a
+    torrent that has nowhere to collide with in the first place. RSS
+    matching is by show name only, so a fansub release with no season
+    marker matches every season's subscription equally well; when the
+    currently tracked season already has that episode and an earlier
+    season doesn't, the earlier season is the more likely home for it.
+
+    Walks `current_season - 1` down to `min_season` and returns the first
+    (closest to current) season whose slot for `episode` is free. A season
+    absent from `occupied_by_season` is treated as free -- this is what
+    lets a show's Season 1 folder be created for the first time even
+    though AutoBangumi never downloaded anything there itself; the show
+    already being tracked at `current_season > 1` is itself evidence an
+    earlier season exists in canon.
+
+    Returns None when `current_season <= min_season` (nothing earlier to
+    consider) or every earlier season already has this exact episode.
+    """
+    for candidate in range(current_season - 1, min_season - 1, -1):
+        if episode not in occupied_by_season.get(candidate, set()):
+            return candidate
+    return None
+
+
 def replacement_staged_path(
     target_path: str, *, old_task_id: str, old_revision: int
 ) -> str:

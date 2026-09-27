@@ -18,6 +18,9 @@ from module.models import ResponseModel
 from module.network.request_url import reset_shared_client
 from module.notification import DownloaderUnavailableEvent, NotificationManager
 from module.parser.analyser.mikan_parser import reset_cache as reset_mikan_cache
+from module.parser.analyser.season_resolver import (
+    reset_cache as reset_season_resolver_cache,
+)
 from module.parser.analyser.tmdb_parser import reset_cache as reset_tmdb_cache
 from module.parser.title_parser import reset_cache as reset_llm_parser
 from module.rss import RSSAnalyser
@@ -421,6 +424,7 @@ class AppContext:
         # singleton) must be dropped too, or a changed tmdb_base_url/bgm_base_url
         # keeps serving results cached from the old endpoint.
         reset_tmdb_cache()
+        reset_season_resolver_cache()
         reset_mikan_cache()
         reset_poster_cache()
         reset_llm_parser()

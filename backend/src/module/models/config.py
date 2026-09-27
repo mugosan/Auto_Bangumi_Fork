@@ -75,6 +75,14 @@ class BangumiManage(BaseModel):
         default="hold",
         description="How to handle a higher revision targeting an existing episode",
     )
+    season_fallback_enabled: bool = Field(
+        default=True,
+        description=(
+            "When an untagged release collides with an already-organized "
+            "episode in the current season, try relocating it to an "
+            "earlier season with a free slot instead of holding forever"
+        ),
+    )
     # 关闭后 refresh_rss 不再把未匹配种子入库（孤儿记录）；代价是这些条目
     # 每轮会被重新内存匹配（廉价），好处是后补规则能立即接住仍在源里的旧集
     track_orphans: bool = Field(

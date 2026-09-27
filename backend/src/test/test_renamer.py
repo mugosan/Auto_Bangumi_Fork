@@ -1,5 +1,6 @@
 """Tests for Renamer: gen_path, rename_file, rename_collection, rename flow."""
 
+import importlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,6 +9,9 @@ from module.conf import settings
 from module.downloader import DownloadClient, RenameOutcome, RenameResult
 from module.manager.renamer import PreparedMediaRename, Renamer
 from module.models import EpisodeFile, Notification, SubtitleFile
+from module.parser.analyser.season_resolver import (
+    reset_cache as reset_season_resolver_cache,
+)
 
 # ---------------------------------------------------------------------------
 # gen_path
@@ -2066,3 +2070,677 @@ class TestNormalizePath:
         from module.manager.renamer import Renamer
 
         assert Renamer._normalize_path("/path/to/dir") == "/path/to/dir"
+
+
+# ---------------------------------------------------------------------------
+# Season fallback: an untagged release colliding with an already-organized
+# episode in the current season gets relocated to an earlier season instead
+# of held forever, when that earlier season has a free slot for it.
+# ---------------------------------------------------------------------------
+
+
+class TestSeasonFallback:
+    """[Sub] ANi doesn't tag season in its titles, so a Season 1 rerun
+    matches this bangumi's Season 2 subscription just as well as a real
+    Season 2 release would, and defaults to Season 2 in the renamer
+    (torrent_parser trusts the passed-in season over an absent title one).
+    That collides with the already-organized Season 2 episode of the same
+    number; the fallback should notice Season 1 is free and relocate there
+    instead of holding the conflict forever."""
+
+    SAVE_PATH_S2 = "/downloads/Bangumi/尼古喵喵 (2026)/Season 2"
+    SAVE_PATH_S1 = "/downloads/Bangumi/尼古喵喵 (2026)/Season 1"
+    OWNER_NAME = "[Lilith-Raws] 尼古喵喵 - 01 [1080P][WEB-DL][AAC AVC][CHT].mp4"
+    OWNER_TARGET = "尼古喵喵 S02E01.mp4"
+    INCOMING_NAME = "[ANi] 尼古喵喵 - 01 [1080P][Baha][WEB-DL][AAC AVC][CHT].mp4"
+
+    @pytest.fixture
+    def renamer(self, mock_qb_client):
+        with patch("module.downloader.download_client.settings") as mock_settings:
+            mock_settings.downloader.type = "qbittorrent"
+            mock_settings.downloader.host = "localhost:8080"
+            mock_settings.downloader.username = "admin"
+            mock_settings.downloader.password = "admin"
+            mock_settings.downloader.ssl = False
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.bangumi_manage.group_tag = False
+            mock_settings.bangumi_manage.remove_bad_torrent = False
+            with patch(
+                "module.downloader.download_client.DownloadClient._DownloadClient__getClient",
+                return_value=mock_qb_client,
+            ):
+                client = DownloadClient()
+        client.client = mock_qb_client
+        return Renamer(client)
+
+    def _infos(self):
+        return [
+            {
+                "hash": "owner-s2e01",
+                "name": self.OWNER_NAME,
+                "save_path": self.SAVE_PATH_S2,
+                "tags": "ab:42, ab:renamed",
+            },
+            {
+                "hash": "ani-incoming",
+                "name": self.INCOMING_NAME,
+                "save_path": self.SAVE_PATH_S2,
+                "tags": "ab:42",
+            },
+        ]
+
+    @staticmethod
+    def _offsets():
+        return {"ani-incoming": (0, 0, "episode")}
+
+    async def test_relocates_to_never_downloaded_earlier_season(
+        self, renamer, test_settings
+    ):
+        """Season 1 was never downloaded through AutoBangumi at all -- its
+        absence from occupancy still counts as a free slot."""
+        renamer.client.client.torrents_info.return_value = self._infos()
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s2e01":
+                return [{"name": self.OWNER_TARGET}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.revision_conflict_policy = "hold"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_awaited_once_with(
+            hashes="ani-incoming", new_location=self.SAVE_PATH_S1
+        )
+        # No destructive rename and no persisted conflict/notification yet --
+        # the actual rename happens on the next pass, once qB reports the
+        # torrent's save_path as updated.
+        renamer.client.client.torrents_rename_file.assert_not_awaited()
+        assert renamer.events == []
+
+    async def test_earlier_season_already_occupied_falls_back_to_hold(
+        self, renamer, test_settings
+    ):
+        """Season 1 already has this exact episode too -- genuinely
+        ambiguous, so the existing hold/conflict behaviour is preserved."""
+        infos = self._infos() + [
+            {
+                "hash": "season1-owner",
+                "name": self.OWNER_NAME,
+                "save_path": self.SAVE_PATH_S1,
+                "tags": "ab:42, ab:renamed",
+            }
+        ]
+        renamer.client.client.torrents_info.return_value = infos
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s2e01":
+                return [{"name": self.OWNER_TARGET}]
+            if torrent_hash == "season1-owner":
+                return [{"name": "尼古喵喵 S01E01.mp4"}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.revision_conflict_policy = "hold"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_not_awaited()
+        assert len(renamer.events) == 1
+
+    async def test_disabled_setting_falls_back_to_hold(self, renamer, test_settings):
+        """season_fallback_enabled=False is the escape hatch: behaviour
+        reverts exactly to the pre-existing hold conflict."""
+        renamer.client.client.torrents_info.return_value = self._infos()
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s2e01":
+                return [{"name": self.OWNER_TARGET}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.revision_conflict_policy = "hold"
+        test_settings.bangumi_manage.season_fallback_enabled = False
+
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_not_awaited()
+        assert len(renamer.events) == 1
+
+    async def test_bangumi_tracking_season_one_never_falls_back(
+        self, renamer, test_settings
+    ):
+        """A bangumi tracking season 1 itself has nothing earlier to fall
+        back to -- must never touch a nonexistent "Season 0"."""
+        save_path_s1 = self.SAVE_PATH_S1
+        infos = [
+            {
+                "hash": "owner-s1e01",
+                "name": self.OWNER_NAME,
+                "save_path": save_path_s1,
+                "tags": "ab:42, ab:renamed",
+            },
+            {
+                "hash": "ani-incoming",
+                "name": self.INCOMING_NAME,
+                "save_path": save_path_s1,
+                "tags": "ab:42",
+            },
+        ]
+        renamer.client.client.torrents_info.return_value = infos
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s1e01":
+                return [{"name": "尼古喵喵 S01E01.mp4"}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.revision_conflict_policy = "hold"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value={"ani-incoming": (0, 0, "episode")}),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_not_awaited()
+        assert len(renamer.events) == 1
+
+    async def test_relocated_torrent_renames_normally_on_next_pass(
+        self, renamer, test_settings
+    ):
+        """Once qB reports the torrent's save_path as Season 1 (simulating
+        the move having completed), the very next pass renames it through
+        the ordinary path -- no special-cased rename logic needed."""
+        renamer.client.client.torrents_info.return_value = [
+            {
+                "hash": "ani-incoming",
+                "name": self.INCOMING_NAME,
+                "save_path": self.SAVE_PATH_S1,
+                "tags": "ab:42",
+            }
+        ]
+        renamer.client.client.torrents_files.return_value = [
+            {"name": self.INCOMING_NAME}
+        ]
+        renamer.client.client.torrents_rename_file.return_value = RenameResult(
+            RenameOutcome.RENAMED
+        )
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            result = await renamer.rename()
+
+        assert len(result) == 1
+        assert result[0].season == 1
+        assert result[0].episode == 1
+        renamer.client.client.move_torrent.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Season fallback, refined with TMDB air-date evidence: the same conflict
+# from TestSeasonFallback, but now the incoming torrent has a recorded
+# pub_date and the show is resolvable on TMDB -- real evidence should
+# override a naive occupancy guess in both directions.
+# ---------------------------------------------------------------------------
+
+
+_AIR_DATE_SHOW_INFO = {
+    "genres": [{"id": 16, "name": "Animation"}],
+    "name": "尼古喵喵",
+    "original_name": "Nikogami",
+    "first_air_date": "2022-01-05",
+    "status": "Ended",
+    "poster_path": "/poster.jpg",
+    "seasons": [
+        {
+            "name": "第 1 季",
+            "air_date": "2022-01-05",
+            "poster_path": "/s1.jpg",
+            "season_number": 1,
+            "episode_count": 12,
+        },
+        {
+            "name": "第 2 季",
+            "air_date": "2026-01-05",
+            "poster_path": "/s2.jpg",
+            "season_number": 2,
+            "episode_count": 12,
+        },
+    ],
+}
+
+
+async def _fake_tmdb_get_json(url: str):
+    if "/search/tv" in url:
+        return {"results": [{"id": 82684}]}
+    if "/external_ids" in url:
+        return {"tvdb_id": None}
+    if "/season/1?" in url:
+        return {"episodes": [{"episode_number": 1, "air_date": "2022-01-05"}]}
+    if "/season/2?" in url:
+        return {"episodes": [{"episode_number": 1, "air_date": "2026-01-05"}]}
+    return _AIR_DATE_SHOW_INFO
+
+
+class TestSeasonFallbackAirDate(TestSeasonFallback):
+    """Reuses TestSeasonFallback's fixture, constants and _infos()/_offsets()."""
+
+    async def _seed_bangumi_and_torrent(self, *, pub_date):
+        from module.database import Database
+        from test.factories import make_bangumi
+
+        async with Database() as db:
+            bangumi = make_bangumi(
+                official_title="尼古喵喵",
+                year="2026",
+                season=2,
+                tvdb_id=None,
+                id_source=None,
+                filter="",
+            )
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            from module.models import Torrent
+
+            await db.torrent.add(
+                Torrent(
+                    name=self.INCOMING_NAME,
+                    url="https://example.com/incoming.torrent",
+                    qb_hash="ani-incoming",
+                    bangumi_id=bangumi_id,
+                    pub_date=pub_date,
+                )
+            )
+        return bangumi_id
+
+    async def test_air_date_confirms_current_season_overrides_occupancy_guess(
+        self, renamer, test_settings, mocker
+    ):
+        """Season 1 was never downloaded (occupancy alone would relocate
+        here, per TestSeasonFallback), but this release's pub_date is
+        close to Season 2's real air date -- a genuine current-season
+        duplicate. Air-date evidence must keep it held, not relocate it."""
+        from datetime import datetime, timezone
+
+        tmdb_parser_module = importlib.import_module(
+            "module.parser.analyser.tmdb_parser"
+        )
+
+        bangumi_id = await self._seed_bangumi_and_torrent(
+            pub_date=datetime(2026, 1, 10, tzinfo=timezone.utc)
+        )
+        infos = [
+            {**self._infos()[0], "tags": f"ab:{bangumi_id}, ab:renamed"},
+            {**self._infos()[1], "tags": f"ab:{bangumi_id}"},
+        ]
+        renamer.client.client.torrents_info.return_value = infos
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s2e01":
+                return [{"name": self.OWNER_TARGET}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+        tmdb_parser_module._tmdb_cache.clear()
+        reset_season_resolver_cache()
+
+        mocker.patch.object(
+            tmdb_parser_module.RequestContent,
+            "get_json",
+            side_effect=_fake_tmdb_get_json,
+        )
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_not_awaited()
+        assert len(renamer.events) == 1
+
+    async def test_air_date_confirms_earlier_season_relocates(
+        self, renamer, test_settings, mocker
+    ):
+        """pub_date close to Season 1's real air date -- the actual leak
+        scenario, now confirmed by evidence rather than guessed from
+        occupancy alone."""
+        from datetime import datetime, timezone
+
+        tmdb_parser_module = importlib.import_module(
+            "module.parser.analyser.tmdb_parser"
+        )
+
+        bangumi_id = await self._seed_bangumi_and_torrent(
+            pub_date=datetime(2022, 1, 8, tzinfo=timezone.utc)
+        )
+        infos = [
+            {**self._infos()[0], "tags": f"ab:{bangumi_id}, ab:renamed"},
+            {**self._infos()[1], "tags": f"ab:{bangumi_id}"},
+        ]
+        renamer.client.client.torrents_info.return_value = infos
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s2e01":
+                return [{"name": self.OWNER_TARGET}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+        tmdb_parser_module._tmdb_cache.clear()
+        reset_season_resolver_cache()
+
+        mocker.patch.object(
+            tmdb_parser_module.RequestContent,
+            "get_json",
+            side_effect=_fake_tmdb_get_json,
+        )
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_awaited_once_with(
+            hashes="ani-incoming", new_location=self.SAVE_PATH_S1
+        )
+        assert renamer.events == []
+
+    async def test_tmdb_failure_falls_back_to_occupancy(
+        self, renamer, test_settings, mocker
+    ):
+        """A TMDB/network hiccup must degrade gracefully to the
+        occupancy-only heuristic, not blow up the rename pass."""
+        from datetime import datetime, timezone
+
+        tmdb_parser_module = importlib.import_module(
+            "module.parser.analyser.tmdb_parser"
+        )
+
+        bangumi_id = await self._seed_bangumi_and_torrent(
+            pub_date=datetime(2022, 1, 8, tzinfo=timezone.utc)
+        )
+        infos = [
+            {**self._infos()[0], "tags": f"ab:{bangumi_id}, ab:renamed"},
+            {**self._infos()[1], "tags": f"ab:{bangumi_id}"},
+        ]
+        renamer.client.client.torrents_info.return_value = infos
+
+        async def files(torrent_hash):
+            if torrent_hash == "owner-s2e01":
+                return [{"name": self.OWNER_TARGET}]
+            return [{"name": self.INCOMING_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+        tmdb_parser_module._tmdb_cache.clear()
+        reset_season_resolver_cache()
+
+        async def broken_get_json(url: str):
+            raise ConnectionError("TMDB unreachable")
+
+        mocker.patch.object(
+            tmdb_parser_module.RequestContent,
+            "get_json",
+            side_effect=broken_get_json,
+        )
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value=self._offsets()),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        # Season 1 was never downloaded -- occupancy alone still relocates,
+        # exactly as in TestSeasonFallback, once the air-date path bails out.
+        renamer.client.client.move_torrent.assert_awaited_once_with(
+            hashes="ani-incoming", new_location=self.SAVE_PATH_S1
+        )
+        assert renamer.events == []
+
+
+class TestProactiveSeasonCorrection(TestSeasonFallbackAirDate):
+    """The conflict-time checks above only ever run for whichever file
+    processes *second* -- they can't undo a slot the leaked file already
+    claimed first. These tests use torrents that have NOT been renamed by
+    anyone yet, to prove correction happens before either one claims
+    anything, independent of which is processed first."""
+
+    GENUINE_S2_NAME = (
+        "[Lilith-Raws] 尼古喵喵 第二季 - 01 [1080P][WEB-DL][AAC AVC][CHT].mp4"
+    )
+
+    async def _seed_leak_and_genuine(self, *, leak_pub_date, genuine_pub_date):
+        from module.database import Database
+        from module.models import Torrent
+        from test.factories import make_bangumi
+
+        async with Database() as db:
+            bangumi = make_bangumi(
+                official_title="尼古喵喵",
+                year="2026",
+                season=2,
+                tvdb_id=None,
+                id_source=None,
+                filter="",
+            )
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name=self.INCOMING_NAME,
+                    url="https://example.com/leak.torrent",
+                    qb_hash="leaked-s1e01",
+                    bangumi_id=bangumi_id,
+                    pub_date=leak_pub_date,
+                )
+            )
+            await db.torrent.add(
+                Torrent(
+                    name=self.GENUINE_S2_NAME,
+                    url="https://example.com/genuine.torrent",
+                    qb_hash="genuine-s2e01",
+                    bangumi_id=bangumi_id,
+                    pub_date=genuine_pub_date,
+                )
+            )
+        return bangumi_id
+
+    async def test_leaked_file_relocates_even_with_zero_conflict(
+        self, renamer, test_settings, mocker
+    ):
+        """No owner exists at Season 2 yet at all -- prior to this fix the
+        leak would have simply claimed S02E01 cleanly, since there was
+        nothing to collide with. It must now relocate on its own evidence,
+        not just when something else already got there first."""
+        import importlib
+        from datetime import datetime, timezone
+
+        tmdb_parser_module = importlib.import_module(
+            "module.parser.analyser.tmdb_parser"
+        )
+
+        bangumi_id = await self._seed_leak_and_genuine(
+            leak_pub_date=datetime(2022, 1, 8, tzinfo=timezone.utc),
+            genuine_pub_date=datetime(2026, 1, 6, tzinfo=timezone.utc),
+        )
+        renamer.client.client.torrents_info.return_value = [
+            {
+                "hash": "leaked-s1e01",
+                "name": self.INCOMING_NAME,
+                "save_path": self.SAVE_PATH_S2,
+                "tags": f"ab:{bangumi_id}",
+            }
+        ]
+        renamer.client.client.torrents_files.return_value = [
+            {"name": self.INCOMING_NAME}
+        ]
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+        tmdb_parser_module._tmdb_cache.clear()
+        reset_season_resolver_cache()
+
+        mocker.patch.object(
+            tmdb_parser_module.RequestContent,
+            "get_json",
+            side_effect=_fake_tmdb_get_json,
+        )
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(return_value={"leaked-s1e01": (0, 0, "episode")}),
+            ),
+        ):
+            assert await renamer.rename() == []
+
+        renamer.client.client.move_torrent.assert_awaited_once_with(
+            hashes="leaked-s1e01", new_location=self.SAVE_PATH_S1
+        )
+        renamer.client.client.torrents_rename_file.assert_not_awaited()
+        assert renamer.events == []
+
+    async def test_correct_outcome_regardless_of_processing_order(
+        self, renamer, test_settings, mocker
+    ):
+        """The leaked file is listed *first* -- the exact ordering that
+        would let it win the race under the old reactive-only design.
+        Both files must still end up correct in one pass: the leak
+        relocates away before touching Season 2's slot, and the genuine
+        file claims that slot cleanly since the leak never got there."""
+        import importlib
+        from datetime import datetime, timezone
+
+        tmdb_parser_module = importlib.import_module(
+            "module.parser.analyser.tmdb_parser"
+        )
+
+        bangumi_id = await self._seed_leak_and_genuine(
+            leak_pub_date=datetime(2022, 1, 8, tzinfo=timezone.utc),
+            genuine_pub_date=datetime(2026, 1, 6, tzinfo=timezone.utc),
+        )
+        renamer.client.client.torrents_info.return_value = [
+            {
+                "hash": "leaked-s1e01",
+                "name": self.INCOMING_NAME,
+                "save_path": self.SAVE_PATH_S2,
+                "tags": f"ab:{bangumi_id}",
+            },
+            {
+                "hash": "genuine-s2e01",
+                "name": self.GENUINE_S2_NAME,
+                "save_path": self.SAVE_PATH_S2,
+                "tags": f"ab:{bangumi_id}",
+            },
+        ]
+
+        async def files(torrent_hash):
+            if torrent_hash == "leaked-s1e01":
+                return [{"name": self.INCOMING_NAME}]
+            return [{"name": self.GENUINE_S2_NAME}]
+
+        renamer.client.client.torrents_files.side_effect = files
+        renamer.client.client.torrents_rename_file.return_value = RenameResult(
+            RenameOutcome.RENAMED
+        )
+        test_settings.bangumi_manage.rename_method = "pn"
+        test_settings.bangumi_manage.season_fallback_enabled = True
+        tmdb_parser_module._tmdb_cache.clear()
+        reset_season_resolver_cache()
+
+        mocker.patch.object(
+            tmdb_parser_module.RequestContent,
+            "get_json",
+            side_effect=_fake_tmdb_get_json,
+        )
+        with (
+            patch("module.manager.renamer.settings", test_settings),
+            patch.object(
+                renamer,
+                "_batch_lookup_offsets",
+                AsyncMock(
+                    return_value={
+                        "leaked-s1e01": (0, 0, "episode"),
+                        "genuine-s2e01": (0, 0, "episode"),
+                    }
+                ),
+            ),
+        ):
+            result = await renamer.rename()
+
+        # The leak relocated instead of renaming -- no notification for it.
+        renamer.client.client.move_torrent.assert_awaited_once_with(
+            hashes="leaked-s1e01", new_location=self.SAVE_PATH_S1
+        )
+        # The genuine file found Season 2's slot untouched and claimed it.
+        # ("第二季" survives into the parsed title under "pn" -- get_season_
+        # and_title only strips Latin "S\d"/"Season \d" markers -- so the
+        # target differs from OWNER_TARGET's plain-title torrents.)
+        renamer.client.client.torrents_rename_file.assert_awaited_once()
+        call = renamer.client.client.torrents_rename_file.call_args
+        assert call.kwargs["old_path"] == self.GENUINE_S2_NAME
+        assert call.kwargs["new_path"] == "尼古喵喵 第二季 S02E01.mp4"
+        assert len(result) == 1
+        assert result[0].season == 2
+        assert result[0].episode == 1
+        assert renamer.events == []

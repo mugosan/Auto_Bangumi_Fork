@@ -32,6 +32,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "group_tag": False,
         "remove_bad_torrent": False,
         "revision_conflict_policy": "hold",
+        "season_fallback_enabled": True,
     },
     "log": {
         "debug_enable": False,
@@ -116,6 +117,10 @@ ENV_TO_ATTR: dict[str, dict[str, Any]] = {
         "AB_REVISION_CONFLICT_POLICY": (
             "revision_conflict_policy",
             lambda e: e.lower(),
+        ),
+        "AB_SEASON_FALLBACK": (
+            "season_fallback_enabled",
+            lambda e: e.lower() in ("true", "1", "t"),
         ),
     },
     "log": {

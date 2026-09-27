@@ -308,12 +308,16 @@ class TestReloadSettings:
     async def test_reload_resets_endpoint_keyed_caches(self, ctx):
         """A changed tmdb_base_url/bgm_base_url must not keep serving results
         cached from the old endpoint — reload_settings() must drop the TMDB,
-        Mikan, and poster caches plus the LLM parser singleton."""
+        season-resolver, Mikan, and poster caches plus the LLM parser
+        singleton."""
         ctx.scheduler.running = False
         with (
             patch("module.core.context.settings"),
             patch("module.core.context.reset_shared_client", new=AsyncMock()),
             patch("module.core.context.reset_tmdb_cache") as mock_tmdb,
+            patch(
+                "module.core.context.reset_season_resolver_cache"
+            ) as mock_season_resolver,
             patch("module.core.context.reset_mikan_cache") as mock_mikan,
             patch("module.core.context.reset_poster_cache") as mock_poster,
             patch("module.core.context.reset_llm_parser") as mock_llm,
@@ -321,6 +325,7 @@ class TestReloadSettings:
             await ctx.reload_settings()
 
         mock_tmdb.assert_called_once()
+        mock_season_resolver.assert_called_once()
         mock_mikan.assert_called_once()
         mock_poster.assert_called_once()
         mock_llm.assert_called_once()

@@ -805,6 +805,13 @@ MIGRATIONS: tuple[Migration, ...] = (
         lambda inspector: not table_exists("bangumi")(inspector)
         or column_exists("bangumi", "id_source")(inspector),
     ),
+    Migration(
+        27,
+        "add pub_date column to torrent for air-date-based season resolution",
+        ("ALTER TABLE torrent ADD COLUMN pub_date TIMESTAMP DEFAULT NULL",),
+        lambda inspector: not table_exists("torrent")(inspector)
+        or column_exists("torrent", "pub_date")(inspector),
+    ),
 )
 
 # 由迁移列表派生，新增迁移时无需手动同步

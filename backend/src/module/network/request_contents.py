@@ -25,12 +25,17 @@ class RequestContent(RequestURL):
             torrents: list[Torrent] = []
             if _filter is None:
                 _filter = "|".join(settings.rss_parser.filter)
-            for _title, torrent_url, homepage in parsed_items:
+            for _title, torrent_url, homepage, pub_date in parsed_items:
                 # A blank filter means "exclude nothing" — re.search("", x) matches
                 # every string, which would otherwise exclude everything.
                 if not _filter or re.search(_filter, _title) is None:
                     torrents.append(
-                        Torrent(name=_title, url=torrent_url, homepage=homepage)
+                        Torrent(
+                            name=_title,
+                            url=torrent_url,
+                            homepage=homepage,
+                            pub_date=pub_date,
+                        )
                     )
                 if isinstance(limit, int):
                     if len(torrents) >= limit:
