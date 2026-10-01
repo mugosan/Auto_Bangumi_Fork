@@ -1,3 +1,5 @@
+import asyncio
+import errno
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,7 +197,7 @@ async def reparse_bangumi(
     download_root = Path(settings.downloader.path)
     folders_removed = 0
     for vacated in vacated_paths:
-        folders_removed += _remove_empty_ancestors(Path(vacated), download_root)
+        folders_removed += await _remove_empty_ancestors(Path(vacated), download_root)
 
     return ReparseResult(
         old_official_title=old_official_title,
@@ -217,18 +219,37 @@ async def reparse_bangumi(
     )
 
 
-def _remove_empty_ancestors(path: Path, download_root: Path) -> int:
+# move_torrent (qBittorrent's torrents/setLocation) returns as soon as the
+# request is *accepted*, not once qBittorrent actually finishes relocating
+# the content on disk -- for a large file, the old directory can briefly
+# still be non-empty by the time cleanup runs right after. Reparse is a
+# one-shot user-triggered action with no later retry, so giving up on the
+# first ENOTEMPTY would leave an otherwise-removable folder behind forever.
+_CLEANUP_RMDIR_ATTEMPTS = 5
+_CLEANUP_RMDIR_RETRY_DELAY = 0.5
+
+
+async def _remove_empty_ancestors(path: Path, download_root: Path) -> int:
     """Remove `path` and any now-empty parent directories left behind after
     moving a torrent's content out, stopping at (and never removing)
-    `download_root` itself. Best-effort and silent: a directory that's
-    missing, non-empty (other files/torrents still in it), or blocked by a
-    permission error just stops the walk there -- moving the torrent already
+    `download_root` itself. Best-effort: a directory that's missing,
+    genuinely still non-empty after retrying, or blocked by a permission
+    error just stops the walk there -- moving the torrent already
     succeeded, so a cleanup failure must never be reported as the action
-    itself failing. Returns how many directories were actually removed.
+    itself failing. Every stop condition is logged (at info for routine
+    "still has other content" cases, at warning for ones worth a user's
+    attention), since this used to fail completely silently and the only
+    visible symptom was "the old folder is still there" with no way to
+    tell why. Returns how many directories were actually removed.
     """
     try:
         resolved_root = download_root.resolve()
-    except OSError:
+    except OSError as e:
+        logger.warning(
+            "Reparse cleanup: cannot resolve configured download root %s: %s",
+            download_root,
+            e,
+        )
         return 0
 
     removed = 0
@@ -242,10 +263,42 @@ def _remove_empty_ancestors(path: Path, download_root: Path) -> int:
             resolved_current == resolved_root
             or resolved_root not in resolved_current.parents
         ):
+            if removed == 0:
+                logger.warning(
+                    "Reparse cleanup: vacated path %s is not under the "
+                    "configured download root %s -- skipping cleanup. If "
+                    "AutoBangumi and the downloader run in separate "
+                    "containers, check they mount the download directory at "
+                    "the same path on both sides.",
+                    path,
+                    download_root,
+                )
             return removed
-        try:
-            current.rmdir()
-        except OSError:
+
+        last_error: OSError | None = None
+        for attempt in range(_CLEANUP_RMDIR_ATTEMPTS):
+            try:
+                current.rmdir()
+                last_error = None
+                break
+            except OSError as e:
+                last_error = e
+                is_final_attempt = attempt == _CLEANUP_RMDIR_ATTEMPTS - 1
+                if e.errno != errno.ENOTEMPTY or is_final_attempt:
+                    break
+                await asyncio.sleep(_CLEANUP_RMDIR_RETRY_DELAY)
+        if last_error is not None:
+            if last_error.errno == errno.ENOTEMPTY:
+                logger.info(
+                    "Reparse cleanup: %s still had content after waiting up "
+                    "to %.1fs for the move to finish -- leaving it in place",
+                    current,
+                    _CLEANUP_RMDIR_ATTEMPTS * _CLEANUP_RMDIR_RETRY_DELAY,
+                )
+            else:
+                logger.warning(
+                    "Reparse cleanup: could not remove %s: %s", current, last_error
+                )
             return removed
         removed += 1
         current = current.parent

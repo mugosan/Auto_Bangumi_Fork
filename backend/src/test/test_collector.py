@@ -847,3 +847,190 @@ class TestReparseBangumi:
         # Same shared old path -- only removed (and counted) once.
         assert result.folders_removed == 2
         assert not old_show_dir.exists()
+
+    async def test_cleanup_retries_rmdir_before_giving_up(self, tmp_path):
+        """move_torrent returns as soon as qBittorrent *accepts* the move,
+        not once it's actually finished relocating the content -- the old
+        directory can briefly still report non-empty. Cleanup must retry
+        instead of giving up on the very first attempt."""
+        bangumi = make_bangumi(
+            filter="",
+            official_title="Wrong Title",
+            year=None,
+            tvdb_id=None,
+            season=1,
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        old_show_dir = tmp_path / "Wrong Title"
+        old_season_dir = old_show_dir / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_dir), "tags": ""}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        import errno as errno_module
+        from pathlib import Path
+
+        real_rmdir = Path.rmdir
+        attempts_left = {"n": 2}
+
+        def flaky_rmdir(self):
+            if self == old_season_dir and attempts_left["n"] > 0:
+                attempts_left["n"] -= 1
+                raise OSError(errno_module.ENOTEMPTY, "Directory not empty")
+            return real_rmdir(self)
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+                patch("module.manager.collector._CLEANUP_RMDIR_RETRY_DELAY", 0),
+                patch.object(Path, "rmdir", flaky_rmdir),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert attempts_left["n"] == 0  # actually exercised the retry path
+        assert result.folders_removed == 2
+        assert not old_season_dir.exists()
+        assert not old_show_dir.exists()
+
+    async def test_cleanup_gives_up_and_logs_after_exhausting_retries(
+        self, tmp_path, caplog
+    ):
+        """A directory that's genuinely still occupied (not just briefly
+        racing an in-progress move) must eventually be left alone --
+        forever retrying would hang the one-shot Reparse request -- and the
+        reason must be logged instead of silently vanishing."""
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        old_show_dir = tmp_path / "Wrong Title"
+        old_season_dir = old_show_dir / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_dir), "tags": ""}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        import errno as errno_module
+        from pathlib import Path
+
+        def always_not_empty(self):
+            if self == old_season_dir:
+                raise OSError(errno_module.ENOTEMPTY, "Directory not empty")
+            raise AssertionError("should never walk past the occupied directory")
+
+        with caplog.at_level("INFO", logger="module.manager.collector"):
+            async with Database() as db:
+                with (
+                    patch(
+                        "module.manager.collector.settings.downloader.path",
+                        str(tmp_path),
+                    ),
+                    patch(
+                        "module.manager.collector.TitleParser.tmdb_parser",
+                        AsyncMock(return_value=tmdb_result),
+                    ),
+                    patch("module.manager.collector._CLEANUP_RMDIR_ATTEMPTS", 2),
+                    patch("module.manager.collector._CLEANUP_RMDIR_RETRY_DELAY", 0),
+                    patch.object(Path, "rmdir", always_not_empty),
+                ):
+                    result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.folders_removed == 0
+        assert old_season_dir.exists()
+        assert "still had content after waiting" in caplog.text
+
+    async def test_cleanup_logs_warning_when_vacated_path_outside_download_root(
+        self, tmp_path, caplog
+    ):
+        """The downloader reporting a save_path that isn't under the
+        configured download root (e.g. AutoBangumi and the downloader
+        mounting the shared volume at different paths in separate
+        containers) can never be cleaned up by this process no matter how
+        the path is sliced -- must be logged clearly instead of looking
+        identical to "nothing needed cleaning up"."""
+        download_root = tmp_path / "downloads"
+        download_root.mkdir()
+        other_mount = tmp_path / "elsewhere"
+        old_season_dir = other_mount / "Wrong Title" / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_dir), "tags": ""}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        with caplog.at_level("WARNING", logger="module.manager.collector"):
+            async with Database() as db:
+                with (
+                    patch(
+                        "module.manager.collector.settings.downloader.path",
+                        str(download_root),
+                    ),
+                    patch(
+                        "module.manager.collector.TitleParser.tmdb_parser",
+                        AsyncMock(return_value=tmdb_result),
+                    ),
+                ):
+                    result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.folders_removed == 0
+        assert old_season_dir.exists()
+        assert "not under the configured download root" in caplog.text
