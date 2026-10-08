@@ -18,6 +18,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "password": "adminadmin",
         "path": "/downloads/Bangumi",
         "ssl": False,
+        "max_folder_name_bytes": 150,
     },
     "rss_parser": {
         "enable": True,
@@ -98,6 +99,7 @@ ENV_TO_ATTR: dict[str, dict[str, Any]] = {
         "AB_DOWNLOADER_USERNAME": "username",
         "AB_DOWNLOADER_PASSWORD": "password",
         "AB_DOWNLOAD_PATH": "path",
+        "AB_MAX_FOLDER_NAME_BYTES": ("max_folder_name_bytes", lambda e: int(e)),
     },
     "rss_parser": {
         "AB_RSS_COLLECTOR": ("enable", lambda e: e.lower() in ("true", "1", "t")),

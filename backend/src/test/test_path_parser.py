@@ -21,6 +21,7 @@ def test_path_to_bangumi_windows_style_save_path():
 
     with patch("module.downloader.path.settings") as mock_settings:
         mock_settings.downloader.path = r"D:\video\Bangumis"
+        mock_settings.downloader.max_folder_name_bytes = 150
         path = r"D:\video\Bangumis\小书痴的下克上\Season 4"
         bangumi_name, season = path_to_bangumi(path)
 
@@ -34,6 +35,7 @@ def test_path_to_bangumi_posix_path_on_linux_ab():
 
     with patch("module.downloader.path.settings") as mock_settings:
         mock_settings.downloader.path = "/downloads/Bangumi"
+        mock_settings.downloader.max_folder_name_bytes = 150
         path = "/downloads/Bangumi/葬送的芙莉莲/Season 2"
         bangumi_name, season = path_to_bangumi(path)
 
@@ -58,6 +60,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 1" in result
@@ -77,6 +80,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 2" in result  # 1 + 1 = 2
@@ -96,6 +100,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 2" in result  # 3 - 1 = 2
@@ -114,6 +119,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 1" in result  # Would be -4, so uses original season
@@ -132,6 +138,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 2" in result
@@ -150,6 +157,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 6" in result  # 1 + 5
@@ -168,6 +176,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 1" in result  # 2 - 1 = 1

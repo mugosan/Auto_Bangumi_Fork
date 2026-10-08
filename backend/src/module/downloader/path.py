@@ -118,16 +118,45 @@ def is_ep(file_path: PathLike[str] | str):
     return file_depth(file_path) <= 2
 
 
+def _truncate_to_byte_budget(name: str, max_bytes: int) -> str:
+    """Truncate `name` to at most `max_bytes` UTF-8 bytes, never splitting a
+    multi-byte character. Filesystems limit a path component by bytes, not
+    characters -- a long title made of CJK characters (3 bytes each in
+    UTF-8) can hugely exceed a byte limit while looking short as a Python
+    string.
+    """
+    encoded = name.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return name
+    # "ignore" drops a truncated trailing multi-byte sequence instead of
+    # raising -- exactly what's needed at a hard byte cutoff.
+    return encoded[:max_bytes].decode("utf-8", errors="ignore").rstrip()
+
+
 def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
     title = data.official_title or "Unknown Bangumi"
     base = f"{title} ({data.year})" if data.year else title
+    base = sanitize_path_fragment(base)
     # tvdb_id/id_source only exist on Bangumi/BangumiUpdate (movies don't
     # get a TVDB cross-reference); getattr keeps this shared with Movie.
     tvdb_id = getattr(data, "tvdb_id", None)
+    tag = ""
     if tvdb_id:
         id_source = getattr(data, "id_source", None) or "tmdb"
-        base = f"{base} [{id_source}-{tvdb_id}]"
-    folder = sanitize_path_fragment(base)
+        tag = f" [{id_source}-{tvdb_id}]"
+    # A long official title -- common for light-novel-style anime titles
+    # that carry a full subtitle -- can exceed a filesystem's per-component
+    # name limit (255 bytes on plain ext4, often far less -- commonly
+    # ~140-155 bytes -- on a seedbox/shared host using encrypted home
+    # directories). The downloader then can't create the folder at all, so
+    # the task just sits at 0% with nowhere to put its files. The id tag is
+    # kept intact (short, and load-bearing for Plex/HAMA matching); only
+    # the title+year portion is truncated to make room for it.
+    budget = max(
+        settings.downloader.max_folder_name_bytes - len(tag.encode("utf-8")), 1
+    )
+    base = _truncate_to_byte_budget(base, budget)
+    folder = sanitize_path_fragment(base + tag)
     if folder:
         return folder
     # 标题全由保留字符组成时清洗结果为空——不能让所有这类条目

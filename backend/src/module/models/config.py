@@ -37,6 +37,19 @@ class Downloader(BaseModel):
     )
     path: str = Field(default="/downloads/Bangumi", description="Downloader path")
     ssl: bool = Field(default=False, description="Downloader ssl")
+    max_folder_name_bytes: int = Field(
+        default=150,
+        description=(
+            "Max UTF-8 bytes for a generated show/movie folder name, "
+            "before the appended [tvdb-N]/[tmdb-N] tag. A long title "
+            "(especially CJK, 3 bytes/char) can otherwise exceed a "
+            "filesystem's per-component name limit -- 255 bytes on plain "
+            "ext4, often far less on a seedbox using encrypted home "
+            "directories -- and silently fail to create the folder at "
+            "all. 150 is a conservative default safe for most such setups; "
+            "raise it if you know your filesystem allows more."
+        ),
+    )
 
     @property
     def host(self):

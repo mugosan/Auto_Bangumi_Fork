@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 from module.downloader.path import (
+    _truncate_to_byte_budget,
     check_files,
     file_depth,
     gen_save_path,
@@ -40,6 +41,7 @@ class TestSanitizePathFragment:
         bangumi = make_bangumi(official_title="??", year=None)
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "//" not in result
@@ -57,6 +59,7 @@ class TestGenSavePath:
         bangumi = make_bangumi(official_title="My Anime", year="2024", season=2)
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "My Anime (2024)" in result
@@ -67,6 +70,7 @@ class TestGenSavePath:
         bangumi = make_bangumi(official_title="Fate/Zero: Part?2", year="2024")
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Fate Zero Part 2 (2024)" in result
@@ -77,6 +81,7 @@ class TestGenSavePath:
         bangumi = make_bangumi(official_title="My Anime", year=None, season=1)
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "My Anime" in result
@@ -88,6 +93,7 @@ class TestGenSavePath:
         bangumi = make_bangumi(season=10)
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "Season 10" in result
@@ -97,6 +103,7 @@ class TestGenSavePath:
         bangumi = make_bangumi(official_title="Test", year="2025", season=3)
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/mnt/media/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result.startswith("/mnt/media/Bangumi")
@@ -111,6 +118,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "My Anime (2024) [tvdb-267440]" in result
@@ -123,6 +131,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert "My Anime (2024) [tmdb-12345]" in result
@@ -133,6 +142,7 @@ class TestGenSavePath:
         bangumi = make_bangumi(official_title="My Anime", year="2024", tvdb_id=None)
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result == "/downloads/Bangumi/My Anime (2024)/Season 1"
@@ -145,6 +155,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result == "/downloads/Bangumi/天气之子 (2019)"
@@ -157,6 +168,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result == "/downloads/Bangumi/My Anime (2024)/Season 0"
@@ -173,6 +185,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result == "/downloads/Bangumi/My Anime (2024)/Season 1"
@@ -188,6 +201,7 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result == "/downloads/Bangumi/My Anime (2024)/Season 0"
@@ -203,9 +217,125 @@ class TestGenSavePath:
         )
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             result = gen_save_path(bangumi)
 
         assert result == "/downloads/Bangumi/My Anime (2024)/Season 0"
+
+
+# ---------------------------------------------------------------------------
+# _truncate_to_byte_budget
+# ---------------------------------------------------------------------------
+
+
+class TestTruncateToByteBudget:
+    def test_under_budget_is_unchanged(self):
+        assert _truncate_to_byte_budget("My Anime", 150) == "My Anime"
+
+    def test_ascii_truncated_to_exact_byte_count(self):
+        result = _truncate_to_byte_budget("A" * 200, 10)
+        assert result == "A" * 10
+        assert len(result.encode("utf-8")) == 10
+
+    def test_never_splits_a_multibyte_character(self):
+        """Each CJK character below is 3 UTF-8 bytes -- a budget that isn't
+        a multiple of 3 must not produce a half-decoded character or raise."""
+        name = "追放されたチート付与魔術師" * 5
+        result = _truncate_to_byte_budget(name, 100)
+        assert len(result.encode("utf-8")) <= 100
+        # Must still be valid, round-trippable UTF-8 -- a split multi-byte
+        # sequence would have been silently dropped, not mangled in place.
+        assert result.encode("utf-8").decode("utf-8") == result
+
+    def test_exact_boundary_is_kept_whole(self):
+        name = "あ" * 10  # 3 bytes each -> 30 bytes total
+        assert _truncate_to_byte_budget(name, 30) == name
+        assert _truncate_to_byte_budget(name, 29) == "あ" * 9
+
+
+# ---------------------------------------------------------------------------
+# _media_folder / gen_save_path long-title truncation
+# ---------------------------------------------------------------------------
+
+
+class TestGenSavePathLongTitleTruncation:
+    LONG_TITLE = (
+        "追放されたチート付与魔術師は気ままなセカンドライフを謳歌する。"
+        "～俺は武器だけじゃなく、あらゆるものに『強化ポイント』を付与できるし、"
+        "俺の意思でいつでも効果を解除できるけど、残った人たち大丈夫？～"
+    )
+
+    def test_long_cjk_title_exceeds_filesystem_limit_before_the_fix(self):
+        """Establishes the bug is real before testing the fix: this is the
+        exact title that produced a 313-byte folder name and a torrent
+        stuck at 0% because qBittorrent's mkdir was rejected outright."""
+        folder_name = f"{self.LONG_TITLE} (2026) [tvdb-473642]"
+        assert len(folder_name.encode("utf-8")) > 255  # ext4's NAME_MAX
+
+    def test_long_title_is_truncated_to_fit_the_configured_budget(self):
+        bangumi = make_bangumi(
+            official_title=self.LONG_TITLE,
+            year="2026",
+            tvdb_id=473642,
+            id_source="tvdb",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
+            result = gen_save_path(bangumi)
+
+        folder_name = result.split("/downloads/Bangumi/", 1)[1].split("/Season")[0]
+        assert len(folder_name.encode("utf-8")) <= 150
+
+    def test_id_tag_always_survives_truncation_intact(self):
+        """The [tvdb-N]/[tmdb-N] tag is short and load-bearing (Plex/HAMA
+        matching, and path_to_bangumi's reverse-parse) -- truncation must
+        always shorten the title, never clip into the tag."""
+        bangumi = make_bangumi(
+            official_title=self.LONG_TITLE,
+            year="2026",
+            tvdb_id=473642,
+            id_source="tvdb",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
+            result = gen_save_path(bangumi)
+
+        assert result.endswith("[tvdb-473642]/Season 1")
+
+    def test_truncated_folder_still_round_trips_through_path_to_bangumi(self):
+        """The id tag survives truncation well enough that path_to_bangumi
+        (used to reverse-derive the show name for "advance" rename mode)
+        still strips it correctly."""
+        bangumi = make_bangumi(
+            official_title=self.LONG_TITLE,
+            year="2026",
+            tvdb_id=473642,
+            id_source="tvdb",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
+            save_path = gen_save_path(bangumi)
+
+            name, season = path_to_bangumi(save_path)
+
+        assert season == 1
+        assert "[tvdb-473642]" not in name
+        assert len(name.encode("utf-8")) <= 150
+
+    def test_short_title_with_tag_is_never_truncated(self):
+        """A normal-length title must be completely unaffected."""
+        bangumi = make_bangumi(
+            official_title="My Anime", year="2024", tvdb_id=267440, id_source="tvdb"
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
+            result = gen_save_path(bangumi)
+
+        assert "My Anime (2024) [tvdb-267440]" in result
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +442,7 @@ class TestPathToBangumi:
         """Parses save_path to extract bangumi name and season number."""
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             name, season = path_to_bangumi(
                 "/downloads/Bangumi/My Anime (2024)/Season 2"
             )
@@ -323,6 +454,7 @@ class TestPathToBangumi:
         """When no Season pattern found, defaults to season 1."""
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             name, season = path_to_bangumi("/downloads/Bangumi/My Anime (2024)")
 
         assert name == "My Anime (2024)"
@@ -332,6 +464,7 @@ class TestPathToBangumi:
         """Recognizes S01 style season naming."""
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             name, season = path_to_bangumi("/downloads/Bangumi/Anime/S03")
 
         assert season == 3
@@ -343,6 +476,7 @@ class TestPathToBangumi:
         not leak into bangumi_name or it ends up baked into every file."""
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             name, season = path_to_bangumi(
                 "/downloads/Bangumi/My Anime (2024) [tvdb-457532]/Season 2"
             )
@@ -354,6 +488,7 @@ class TestPathToBangumi:
         """Same as above for the tmdb-id fallback tag (no tvdb match)."""
         with patch("module.downloader.path.settings") as mock_settings:
             mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 150
             name, season = path_to_bangumi(
                 "/downloads/Bangumi/My Anime (2024) [tmdb-12345]/Season 1"
             )

@@ -25,6 +25,7 @@ def download_client(mock_qb_client):
         mock_settings.downloader.password = "admin"
         mock_settings.downloader.ssl = False
         mock_settings.downloader.path = "/downloads/Bangumi"
+        mock_settings.downloader.max_folder_name_bytes = 150
         mock_settings.bangumi_manage.group_tag = False
         with patch(
             "module.downloader.download_client.DownloadClient._DownloadClient__getClient",
@@ -314,6 +315,7 @@ class TestAddTorrent:
 
             with patch("module.downloader.path.settings") as mock_settings:
                 mock_settings.downloader.path = "/downloads/Bangumi"
+                mock_settings.downloader.max_folder_name_bytes = 150
                 await download_client.add_torrent(torrent, bangumi)
 
         assert bangumi.save_path is not None
