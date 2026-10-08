@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from os import PathLike
 from pathlib import PureWindowsPath
@@ -133,6 +134,46 @@ def _truncate_to_byte_budget(name: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore").rstrip()
 
 
+# Keyed by download root path -- querying the OS costs a syscall, and the
+# answer never changes for a given mount within one process lifetime.
+_name_max_cache: dict[str, int | None] = {}
+
+
+def reset_name_max_cache() -> None:
+    """Clear the cached per-root NAME_MAX. Call after a config reload that
+    could change downloader.path to a different mount."""
+    _name_max_cache.clear()
+
+
+def _detect_name_max_bytes(download_root: str) -> int | None:
+    """Ask the OS for the real per-component filename limit on the actual
+    download filesystem -- the same thing `getconf NAME_MAX <path>` reports
+    -- instead of guessing. Encrypted-home setups (eCryptfs and similar)
+    report their own reduced limit through this same mechanism, so this is
+    authoritative where it's available, not just a plain-filesystem check.
+
+    Returns None (falling back to the configured default) when detection
+    isn't possible: Windows has no `os.pathconf`, and a root that doesn't
+    exist yet, isn't readable, or sits on something that doesn't support
+    this query (certain network/overlay filesystems) all raise.
+    """
+    if PLATFORM == "Windows":
+        return None
+    try:
+        return os.pathconf(download_root, "PC_NAME_MAX")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _effective_max_folder_name_bytes() -> int:
+    download_root = settings.downloader.path
+    if download_root not in _name_max_cache:
+        _name_max_cache[download_root] = _detect_name_max_bytes(download_root)
+    detected = _name_max_cache[download_root]
+    configured = settings.downloader.max_folder_name_bytes
+    return configured if detected is None else min(detected, configured)
+
+
 def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
     title = data.official_title or "Unknown Bangumi"
     base = f"{title} ({data.year})" if data.year else title
@@ -145,16 +186,13 @@ def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
         id_source = getattr(data, "id_source", None) or "tmdb"
         tag = f" [{id_source}-{tvdb_id}]"
     # A long official title -- common for light-novel-style anime titles
-    # that carry a full subtitle -- can exceed a filesystem's per-component
-    # name limit (255 bytes on plain ext4, often far less -- commonly
-    # ~140-155 bytes -- on a seedbox/shared host using encrypted home
-    # directories). The downloader then can't create the folder at all, so
-    # the task just sits at 0% with nowhere to put its files. The id tag is
-    # kept intact (short, and load-bearing for Plex/HAMA matching); only
-    # the title+year portion is truncated to make room for it.
-    budget = max(
-        settings.downloader.max_folder_name_bytes - len(tag.encode("utf-8")), 1
-    )
+    # that carry a full subtitle -- can exceed the filesystem's real
+    # per-component name limit (255 bytes on plain ext4, much less on an
+    # encrypted-home seedbox). The downloader then can't create the folder
+    # at all, so the task just sits at 0% with nowhere to put its files.
+    # The id tag is kept intact (short, and load-bearing for Plex/HAMA
+    # matching); only the title+year portion is truncated to make room.
+    budget = max(_effective_max_folder_name_bytes() - len(tag.encode("utf-8")), 1)
     base = _truncate_to_byte_budget(base, budget)
     folder = sanitize_path_fragment(base + tag)
     if folder:

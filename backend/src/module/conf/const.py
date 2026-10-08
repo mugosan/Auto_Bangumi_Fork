@@ -18,7 +18,7 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
         "password": "adminadmin",
         "path": "/downloads/Bangumi",
         "ssl": False,
-        "max_folder_name_bytes": 150,
+        "max_folder_name_bytes": 255,
     },
     "rss_parser": {
         "enable": True,

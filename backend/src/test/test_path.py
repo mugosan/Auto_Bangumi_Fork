@@ -1,5 +1,6 @@
 """Tests for path helpers: save path generation, file classification, parsing."""
 
+import os
 from unittest.mock import patch
 
 from module.downloader.path import (
@@ -336,6 +337,56 @@ class TestGenSavePathLongTitleTruncation:
             result = gen_save_path(bangumi)
 
         assert "My Anime (2024) [tvdb-267440]" in result
+
+
+class TestEffectiveMaxFolderNameBytes:
+    """The real per-mount limit (`os.pathconf`, same as `getconf NAME_MAX
+    <path>`) takes precedence over the configured default whenever it can
+    be detected -- a plain filesystem reporting the standard 255 should
+    not be truncated down to some arbitrary lower default "just in case",
+    and a genuinely restrictive one (e.g. an encrypted-home seedbox, which
+    reports its own reduced limit through this same mechanism) should be
+    respected even if the configured default is set higher."""
+
+    def test_detected_limit_caps_an_overly_generous_configured_value(self, tmp_path):
+        """tmp_path is a real directory on this machine's real filesystem,
+        so os.pathconf against it returns the real OS-reported NAME_MAX --
+        exercising actual detection, not a mocked stand-in for it."""
+        from module.downloader import path as path_module
+
+        real_limit = os.pathconf(str(tmp_path), "PC_NAME_MAX")
+        long_title = "あ" * 200  # 600 bytes -- certainly past any real limit
+
+        bangumi = make_bangumi(official_title=long_title, year=None, tvdb_id=None)
+        with (
+            patch.object(path_module, "_name_max_cache", {}),
+            patch("module.downloader.path.settings") as mock_settings,
+        ):
+            mock_settings.downloader.path = str(tmp_path)
+            # Deliberately far above what any real filesystem allows, to
+            # prove detection -- not this config value -- is what bites.
+            mock_settings.downloader.max_folder_name_bytes = 10_000
+            result = gen_save_path(bangumi)
+
+        folder_name = result[len(str(tmp_path)) + 1 :].split("/Season")[0]
+        assert len(folder_name.encode("utf-8")) <= real_limit
+
+    def test_falls_back_to_configured_value_when_root_does_not_exist(self):
+        """A download root that hasn't been created yet (or isn't
+        reachable) can't be queried -- must fall back to the configured
+        value instead of raising."""
+        from module.downloader import path as path_module
+
+        bangumi = make_bangumi(official_title="My Anime", year="2024", tvdb_id=None)
+        with (
+            patch.object(path_module, "_name_max_cache", {}),
+            patch("module.downloader.path.settings") as mock_settings,
+        ):
+            mock_settings.downloader.path = "/this/path/does/not/exist/anywhere"
+            mock_settings.downloader.max_folder_name_bytes = 150
+            result = gen_save_path(bangumi)
+
+        assert "My Anime (2024)" in result
 
 
 # ---------------------------------------------------------------------------

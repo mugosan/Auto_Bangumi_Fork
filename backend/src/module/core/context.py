@@ -14,6 +14,7 @@ from module.conf import LEGACY_DATA_PATH, VERSION, settings
 from module.database import Database
 from module.downloader.download_client import clear_credential_latch
 from module.downloader.download_client import shutdown as downloader_shutdown
+from module.downloader.path import reset_name_max_cache
 from module.models import ResponseModel
 from module.network.request_url import reset_shared_client
 from module.notification import DownloaderUnavailableEvent, NotificationManager
@@ -428,6 +429,9 @@ class AppContext:
         reset_mikan_cache()
         reset_poster_cache()
         reset_llm_parser()
+        # downloader.path may now point at a different mount -- drop the
+        # cached NAME_MAX for the old one.
+        reset_name_max_cache()
         # 用户保存了设置即视为已处理凭据问题：解除下载器的凭据失败闩锁，
         # 允许重试（哪怕保存的值没变——qB 侧密码可能被改回来了）。
         clear_credential_latch()

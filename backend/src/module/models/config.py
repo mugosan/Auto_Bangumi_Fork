@@ -38,16 +38,21 @@ class Downloader(BaseModel):
     path: str = Field(default="/downloads/Bangumi", description="Downloader path")
     ssl: bool = Field(default=False, description="Downloader ssl")
     max_folder_name_bytes: int = Field(
-        default=150,
+        default=255,
         description=(
             "Max UTF-8 bytes for a generated show/movie folder name, "
             "before the appended [tvdb-N]/[tmdb-N] tag. A long title "
             "(especially CJK, 3 bytes/char) can otherwise exceed a "
-            "filesystem's per-component name limit -- 255 bytes on plain "
-            "ext4, often far less on a seedbox using encrypted home "
-            "directories -- and silently fail to create the folder at "
-            "all. 150 is a conservative default safe for most such setups; "
-            "raise it if you know your filesystem allows more."
+            "filesystem's per-component name limit and silently fail to "
+            "create the folder at all. The real limit (same as `getconf "
+            "NAME_MAX <path>`) is detected automatically and takes "
+            "precedence when lower than this -- e.g. a seedbox on "
+            "encrypted home directories reports its own reduced limit "
+            "through that same mechanism. 255 (the standard ext4/POSIX "
+            "max) is just the ceiling used when detection isn't possible "
+            "(Windows, or a path that can't be queried yet); lower it only "
+            "if you want AutoBangumi to truncate more aggressively than "
+            "the filesystem strictly requires."
         ),
     )
 

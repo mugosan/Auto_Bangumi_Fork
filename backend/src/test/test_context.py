@@ -309,7 +309,8 @@ class TestReloadSettings:
         """A changed tmdb_base_url/bgm_base_url must not keep serving results
         cached from the old endpoint — reload_settings() must drop the TMDB,
         season-resolver, Mikan, and poster caches plus the LLM parser
-        singleton."""
+        singleton. A changed downloader.path must similarly drop the
+        cached NAME_MAX for whatever mount the old path pointed at."""
         ctx.scheduler.running = False
         with (
             patch("module.core.context.settings"),
@@ -321,6 +322,7 @@ class TestReloadSettings:
             patch("module.core.context.reset_mikan_cache") as mock_mikan,
             patch("module.core.context.reset_poster_cache") as mock_poster,
             patch("module.core.context.reset_llm_parser") as mock_llm,
+            patch("module.core.context.reset_name_max_cache") as mock_name_max,
         ):
             await ctx.reload_settings()
 
@@ -329,3 +331,4 @@ class TestReloadSettings:
         mock_mikan.assert_called_once()
         mock_poster.assert_called_once()
         mock_llm.assert_called_once()
+        mock_name_max.assert_called_once()
