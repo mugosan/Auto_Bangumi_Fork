@@ -133,6 +133,92 @@ class TestGenPath:
 
 
 # ---------------------------------------------------------------------------
+# gen_path byte-safe truncation
+# ---------------------------------------------------------------------------
+
+
+class TestGenPathLongTitleTruncation:
+    """ "pn"/"subtitle_pn" build the filename from a release's own parsed
+    title -- completely independent of the folder-name byte-budget fix,
+    since that title never passes through _media_folder() at all. A
+    verbose light-novel-style release title plus the " SxxExx.ext" suffix
+    can exceed the filesystem's real per-component limit even though the
+    containing folder stayed safely within budget -- reported in
+    production at 252 bytes for a title whose folder (from the official
+    TMDB title, independently truncated) sat at 253."""
+
+    LONG_TITLE = (
+        "追放されたチート付与魔術師は気ままなセカンドライフを謳歌する。"
+        "～俺は武器だけじゃなく、あらゆるものに『強化ポイント』を付与できるし、"
+        "俺の意思でいつでも効果を解除できるけど、残った人たち大丈夫？～"
+    )
+
+    def test_pn_title_truncated_to_fit_with_episode_suffix(self):
+        ep = EpisodeFile(
+            media_path="old.mp4",
+            title=self.LONG_TITLE,
+            season=1,
+            episode=1,
+            suffix=".mp4",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 255
+            result = Renamer.gen_path(ep, "Bangumi Name", method="pn")
+
+        assert len(result.encode("utf-8")) <= 255
+        assert result.endswith(" S01E01.mp4")
+
+    def test_advance_bangumi_name_truncated_to_fit_with_episode_suffix(self):
+        ep = EpisodeFile(
+            media_path="old.mp4",
+            title="Short release title",
+            season=1,
+            episode=1,
+            suffix=".mp4",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 255
+            result = Renamer.gen_path(ep, self.LONG_TITLE, method="advance")
+
+        assert len(result.encode("utf-8")) <= 255
+        assert result.endswith(" S01E01.mp4")
+
+    def test_subtitle_pn_reserves_language_and_extension_too(self):
+        sub = SubtitleFile(
+            media_path="old.ass",
+            title=self.LONG_TITLE,
+            season=1,
+            episode=1,
+            language="zh-tw",
+            suffix=".ass",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 255
+            result = Renamer.gen_path(sub, "Bangumi Name", method="subtitle_pn")
+
+        assert len(result.encode("utf-8")) <= 255
+        assert result.endswith(" S01E01.zh-tw.ass")
+
+    def test_short_title_is_never_truncated(self):
+        """An already-correct, already-on-disk-style short filename must
+        come out byte-for-byte identical to before this fix -- truncation
+        must be a strict no-op whenever the name already fits, or a
+        working library's existing files would get spuriously renamed."""
+        ep = EpisodeFile(
+            media_path="old.mkv", title="My Anime", season=1, episode=5, suffix=".mkv"
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 255
+            result = Renamer.gen_path(ep, "Bangumi Name", method="pn")
+
+        assert result == "My Anime S01E05.mkv"
+
+
+# ---------------------------------------------------------------------------
 # gen_path for movies
 # ---------------------------------------------------------------------------
 
@@ -901,6 +987,7 @@ class TestRenameFlow:
                 mock_settings.bangumi_manage.remove_bad_torrent = False
                 with patch("module.downloader.path.settings") as mock_path_settings:
                     mock_path_settings.downloader.path = "/downloads/Bangumi"
+                    mock_path_settings.downloader.max_folder_name_bytes = 255
                     result = await renamer.rename()
 
         assert len(result) == 1
@@ -938,6 +1025,7 @@ class TestRenameFlow:
                 mock_settings.bangumi_manage.remove_bad_torrent = False
                 with patch("module.downloader.path.settings") as mock_path_settings:
                     mock_path_settings.downloader.path = "/downloads/Bangumi"
+                    mock_path_settings.downloader.max_folder_name_bytes = 255
                     await renamer.rename()
 
         renamer.client.client.set_category.assert_called_once_with(
@@ -970,6 +1058,7 @@ class TestRenameFlow:
                 mock_settings.bangumi_manage.remove_bad_torrent = False
                 with patch("module.downloader.path.settings") as mock_path_settings:
                     mock_path_settings.downloader.path = "/downloads/Bangumi"
+                    mock_path_settings.downloader.max_folder_name_bytes = 255
                     await renamer.rename()
 
         calls = renamer.client.client.torrents_rename_file.call_args_list
@@ -994,6 +1083,7 @@ class TestRenameFlow:
             mock_settings.bangumi_manage.rename_method = "pn"
             with patch("module.downloader.path.settings") as mock_path_settings:
                 mock_path_settings.downloader.path = "/downloads/Bangumi"
+                mock_path_settings.downloader.max_folder_name_bytes = 255
                 result = await renamer.rename()
 
         assert result == []

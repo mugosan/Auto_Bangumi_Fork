@@ -214,6 +214,7 @@ class TestRenameFlow:
                 mock_mgr_settings.bangumi_manage.remove_bad_torrent = False
                 with patch("module.downloader.path.settings") as mock_path_settings:
                     mock_path_settings.downloader.path = "/downloads/Bangumi"
+                    mock_path_settings.downloader.max_folder_name_bytes = 255
                     result = await renamer.rename()
 
         # Verify: file was renamed
@@ -277,6 +278,7 @@ class TestRenameFlow:
                 mock_mgr_settings.bangumi_manage.remove_bad_torrent = False
                 with patch("module.downloader.path.settings") as mock_path_settings:
                     mock_path_settings.downloader.path = "/downloads/Bangumi"
+                    mock_path_settings.downloader.max_folder_name_bytes = 255
                     await renamer.rename()
 
         # Verify: all 3 files renamed

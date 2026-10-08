@@ -19,9 +19,12 @@ from module.database.bangumi import (
 from module.downloader import DownloadClient, RenameOutcome, RenameResult
 from module.downloader.path import (
     check_files,
+    effective_max_folder_name_bytes,
     is_ep,
+    normalize_directory_permissions,
     path_to_bangumi,
     sibling_season_save_path,
+    truncate_to_byte_budget,
 )
 from module.models import EpisodeFile, Notification, RenameOperation, SubtitleFile
 from module.notification import RenameConflictEvent
@@ -121,6 +124,27 @@ class Renamer:
         return f"{movie_name}{file_info.suffix}"
 
     @staticmethod
+    def _fit_name(prefix: str, fixed_suffix: str) -> str:
+        """Truncate `prefix` (title/bangumi_name) so `prefix + fixed_suffix`
+        fits the filesystem's real per-component byte limit, never
+        touching `fixed_suffix` (the SxxExx/language/extension tail).
+
+        A no-op whenever the full name already fits -- this must never
+        change an already-correct, already-on-disk filename (see the
+        stability note on `title`/`bangumi_name` below), only keep a
+        newly-generated one from being too long to create at all. Title
+        text parsed fresh from a release's own name (used verbatim in
+        "pn"/"subtitle_pn" mode) isn't bounded by the folder-name fix at
+        all -- it can independently be long enough to exceed the limit
+        once the episode suffix is appended, even when the containing
+        folder stayed within budget.
+        """
+        budget = max(
+            effective_max_folder_name_bytes() - len(fixed_suffix.encode("utf-8")), 1
+        )
+        return truncate_to_byte_budget(prefix, budget)
+
+    @staticmethod
     def gen_path(
         file_info: EpisodeFile | SubtitleFile,
         bangumi_name: str,
@@ -153,12 +177,16 @@ class Renamer:
                 assert isinstance(
                     file_info, SubtitleFile
                 ), "subtitle methods require a SubtitleFile"
-                return f"{base}.{file_info.language}{file_info.suffix}"
+                suffix = f".{file_info.language}{file_info.suffix}"
+                return f"{Renamer._fit_name(base, suffix)}{suffix}"
+            base = Renamer._fit_name(base, file_info.suffix)
             return f"{base}{file_info.suffix}"
         elif method == "pn":
-            return f"{title} S{season}E{episode}{file_info.suffix}"
+            suffix = f" S{season}E{episode}{file_info.suffix}"
+            return f"{Renamer._fit_name(title, suffix)}{suffix}"
         elif method == "advance":
-            return f"{bangumi_name} S{season}E{episode}{file_info.suffix}"
+            suffix = f" S{season}E{episode}{file_info.suffix}"
+            return f"{Renamer._fit_name(bangumi_name, suffix)}{suffix}"
         elif method == "normal":
             logger.warning("Normal rename method is deprecated.")
             return file_info.media_path
@@ -166,12 +194,14 @@ class Renamer:
             assert isinstance(
                 file_info, SubtitleFile
             ), "subtitle_pn requires a SubtitleFile"
-            return f"{title} S{season}E{episode}.{file_info.language}{file_info.suffix}"
+            suffix = f" S{season}E{episode}.{file_info.language}{file_info.suffix}"
+            return f"{Renamer._fit_name(title, suffix)}{suffix}"
         elif method == "subtitle_advance":
             assert isinstance(
                 file_info, SubtitleFile
             ), "subtitle_advance requires a SubtitleFile"
-            return f"{bangumi_name} S{season}E{episode}.{file_info.language}{file_info.suffix}"
+            suffix = f" S{season}E{episode}.{file_info.language}{file_info.suffix}"
+            return f"{Renamer._fit_name(bangumi_name, suffix)}{suffix}"
         else:
             logger.error(f"Unknown rename method: {method}")
             return file_info.media_path
@@ -763,6 +793,9 @@ class Renamer:
             resolved_season,
         )
         await self.client.move_torrent(info["hash"], new_save_path)
+        # new_save_path is the Season N directory; the permissions bug is
+        # one level up, on the show folder itself.
+        normalize_directory_permissions(str(PurePath(new_save_path).parent))
         return MediaRenameReport(
             result=RenameResult(
                 RenameOutcome.RETRYABLE_FAILURE,
@@ -877,6 +910,9 @@ class Renamer:
             ),
         )
         await self.client.move_torrent(info["hash"], new_save_path)
+        # new_save_path is the Season N directory; the permissions bug is
+        # one level up, on the show folder itself.
+        normalize_directory_permissions(str(PurePath(new_save_path).parent))
         return MediaRenameReport(
             result=RenameResult(
                 RenameOutcome.RETRYABLE_FAILURE,

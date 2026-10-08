@@ -1,6 +1,8 @@
 import logging
 import os
+import pathlib
 import re
+import stat
 from os import PathLike
 from pathlib import PureWindowsPath
 
@@ -119,7 +121,7 @@ def is_ep(file_path: PathLike[str] | str):
     return file_depth(file_path) <= 2
 
 
-def _truncate_to_byte_budget(name: str, max_bytes: int) -> str:
+def truncate_to_byte_budget(name: str, max_bytes: int) -> str:
     """Truncate `name` to at most `max_bytes` UTF-8 bytes, never splitting a
     multi-byte character. Filesystems limit a path component by bytes, not
     characters -- a long title made of CJK characters (3 bytes each in
@@ -165,13 +167,68 @@ def _detect_name_max_bytes(download_root: str) -> int | None:
         return None
 
 
-def _effective_max_folder_name_bytes() -> int:
+def effective_max_folder_name_bytes() -> int:
     download_root = settings.downloader.path
     if download_root not in _name_max_cache:
         _name_max_cache[download_root] = _detect_name_max_bytes(download_root)
     detected = _name_max_cache[download_root]
     configured = settings.downloader.max_folder_name_bytes
     return configured if detected is None else min(detected, configured)
+
+
+def normalize_directory_permissions(path: str) -> None:
+    """Match a relocated show/season directory's permissions to its
+    parent's, recursively.
+
+    A torrent relocated via the downloader's move/setLocation API (Reparse,
+    or the season-leak-fix's relocate-to-earlier-season path) has its
+    destination directory created by the downloader itself, not by this
+    process -- and that creation apparently doesn't always follow the same
+    default permissions a normal fresh download gets. Observed in
+    production: every normally-downloaded show at `0o775`, but one that
+    had sat errored (path too long) and was only relocated afterward at
+    `0o700` -- unreadable by anything other than the exact owning uid,
+    which looks to Plex (or any reader running as a different user)
+    identical to "this show was never indexed."
+
+    Best-effort and silent on failure: a permissions problem here must
+    never turn an already-successful move into a reported failure, and
+    this process may not even own these files (just share the mount).
+    Windows has no comparable unix permission model, so this is a no-op
+    there.
+    """
+    if PLATFORM == "Windows":
+        return
+    # The module-level `Path` name is PureWindowsPath on a Windows-flagged
+    # install (for parsing a possibly-remote-Windows downloader's path
+    # strings) and has no filesystem methods at all -- this function only
+    # ever runs on the already-excluded Windows branch above, so it needs
+    # the real, concrete local-OS Path explicitly.
+    target = pathlib.Path(path)
+    try:
+        parent_mode = stat.S_IMODE(target.parent.stat().st_mode)
+    except OSError as e:
+        logger.debug("Could not read parent permissions for %s: %s", target, e)
+        return
+    try:
+        target.chmod(parent_mode)
+        for sub in target.rglob("*"):
+            try:
+                if sub.is_dir():
+                    sub.chmod(parent_mode)
+                else:
+                    # Directories get the parent's exact mode (so Plex can
+                    # traverse them); files just need read added for
+                    # whichever of group/other the parent grants execute
+                    # (≈ traversal/access) to -- never touch the owner
+                    # bits or make a plain media file executable.
+                    current = stat.S_IMODE(sub.stat().st_mode)
+                    readable_bits = (parent_mode & 0o077) & 0o444
+                    sub.chmod(current | readable_bits)
+            except OSError as e:
+                logger.debug("Could not normalize permissions for %s: %s", sub, e)
+    except OSError as e:
+        logger.debug("Could not normalize permissions for %s: %s", target, e)
 
 
 def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
@@ -198,8 +255,8 @@ def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
     # title, since the budget ran out before reaching the parenthesis at
     # the end.
     reserved = len(year_suffix.encode("utf-8")) + len(tag.encode("utf-8"))
-    budget = max(_effective_max_folder_name_bytes() - reserved, 1)
-    title = _truncate_to_byte_budget(title, budget)
+    budget = max(effective_max_folder_name_bytes() - reserved, 1)
+    title = truncate_to_byte_budget(title, budget)
     folder = sanitize_path_fragment(title + year_suffix + tag)
     if folder:
         return folder

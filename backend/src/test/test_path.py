@@ -1,18 +1,20 @@
 """Tests for path helpers: save path generation, file classification, parsing."""
 
 import os
+import stat
 from unittest.mock import patch
 
 from module.downloader.path import (
-    _truncate_to_byte_budget,
     check_files,
     file_depth,
     gen_save_path,
     is_ep,
+    normalize_directory_permissions,
     path_to_bangumi,
     rule_name,
     sanitize_path_fragment,
     sibling_season_save_path,
+    truncate_to_byte_budget,
 )
 from test.factories import make_bangumi
 
@@ -225,16 +227,16 @@ class TestGenSavePath:
 
 
 # ---------------------------------------------------------------------------
-# _truncate_to_byte_budget
+# truncate_to_byte_budget
 # ---------------------------------------------------------------------------
 
 
 class TestTruncateToByteBudget:
     def test_under_budget_is_unchanged(self):
-        assert _truncate_to_byte_budget("My Anime", 150) == "My Anime"
+        assert truncate_to_byte_budget("My Anime", 150) == "My Anime"
 
     def test_ascii_truncated_to_exact_byte_count(self):
-        result = _truncate_to_byte_budget("A" * 200, 10)
+        result = truncate_to_byte_budget("A" * 200, 10)
         assert result == "A" * 10
         assert len(result.encode("utf-8")) == 10
 
@@ -242,7 +244,7 @@ class TestTruncateToByteBudget:
         """Each CJK character below is 3 UTF-8 bytes -- a budget that isn't
         a multiple of 3 must not produce a half-decoded character or raise."""
         name = "追放されたチート付与魔術師" * 5
-        result = _truncate_to_byte_budget(name, 100)
+        result = truncate_to_byte_budget(name, 100)
         assert len(result.encode("utf-8")) <= 100
         # Must still be valid, round-trippable UTF-8 -- a split multi-byte
         # sequence would have been silently dropped, not mangled in place.
@@ -250,8 +252,8 @@ class TestTruncateToByteBudget:
 
     def test_exact_boundary_is_kept_whole(self):
         name = "あ" * 10  # 3 bytes each -> 30 bytes total
-        assert _truncate_to_byte_budget(name, 30) == name
-        assert _truncate_to_byte_budget(name, 29) == "あ" * 9
+        assert truncate_to_byte_budget(name, 30) == name
+        assert truncate_to_byte_budget(name, 29) == "あ" * 9
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +411,58 @@ class TestEffectiveMaxFolderNameBytes:
             result = gen_save_path(bangumi)
 
         assert "My Anime (2024)" in result
+
+
+class TestNormalizeDirectoryPermissions:
+    """A torrent relocated via move_torrent has its destination directory
+    created by the downloader, not this process -- observed in production
+    coming out at 0o700 (unreadable by anyone but the exact owning uid)
+    while every normally-downloaded show sat at 0o775, which made Plex
+    (running as a different user) unable to even list the folder."""
+
+    def test_matches_directory_permissions_to_parent(self, tmp_path):
+        parent = tmp_path
+        parent.chmod(0o775)
+        show_dir = parent / "Show (2024) [tvdb-1]"
+        season_dir = show_dir / "Season 1"
+        season_dir.mkdir(parents=True)
+        show_dir.chmod(0o700)
+        season_dir.chmod(0o700)
+
+        normalize_directory_permissions(str(show_dir))
+
+        assert stat.S_IMODE(show_dir.stat().st_mode) == 0o775
+        assert stat.S_IMODE(season_dir.stat().st_mode) == 0o775
+
+    def test_adds_read_to_files_without_making_them_executable(self, tmp_path):
+        parent = tmp_path
+        parent.chmod(0o775)
+        show_dir = parent / "Show (2024) [tvdb-1]"
+        show_dir.mkdir()
+        episode = show_dir / "Show S01E01.mp4"
+        episode.write_bytes(b"data")
+        show_dir.chmod(0o700)
+        episode.chmod(0o600)  # owner-only, same shape as the reported bug
+
+        normalize_directory_permissions(str(show_dir))
+
+        mode = stat.S_IMODE(episode.stat().st_mode)
+        assert mode & 0o044 == 0o044  # group+other can now read it
+        assert mode & 0o011 == 0  # still not executable for group/other
+
+    def test_nonexistent_path_does_not_raise(self):
+        normalize_directory_permissions("/this/path/does/not/exist/anywhere")
+
+    def test_noop_on_windows(self, tmp_path):
+        show_dir = tmp_path / "Show (2024)"
+        show_dir.mkdir()
+        show_dir.chmod(0o700)
+
+        with patch("module.downloader.path.PLATFORM", "Windows"):
+            normalize_directory_permissions(str(show_dir))
+
+        # Unchanged -- the function returned immediately without touching it.
+        assert stat.S_IMODE(show_dir.stat().st_mode) == 0o700
 
 
 # ---------------------------------------------------------------------------

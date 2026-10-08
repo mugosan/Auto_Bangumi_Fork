@@ -68,6 +68,7 @@ def mock_settings():
     settings.downloader.password = "adminadmin"
     settings.downloader.path = "/downloads/Bangumi"
     settings.downloader.ssl = False
+    settings.downloader.max_folder_name_bytes = 255
     settings.rss_parser = MagicMock()
     settings.rss_parser.enable = True
     settings.rss_parser.filter = ["720", r"\d+-\d"]

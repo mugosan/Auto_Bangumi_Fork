@@ -5,6 +5,7 @@ subscribe/collect were stored with ``bangumi_id=None`` and showed up as
 orphans regardless of the ``track_orphans`` setting.
 """
 
+import stat
 from unittest.mock import AsyncMock, patch
 
 from module.database import Database
@@ -1107,3 +1108,70 @@ class TestReparseBangumi:
         client.move_torrent.assert_awaited_once_with("abc123", result.new_folder)
         # The now-empty old (year-less) folder is cleaned up too.
         assert not old_season_dir.exists()
+
+    async def test_reparse_fixes_restrictive_permissions_left_by_the_move(
+        self, tmp_path
+    ):
+        """Reported: a torrent relocated via move_torrent ends up with its
+        destination directory at 0o700 (created by the downloader itself,
+        not this process) instead of the 0o775 every normally-downloaded
+        show gets -- which Plex, running as a different user, can't even
+        list. move_torrent is mocked here (as in every other test in this
+        class) so it never touches the filesystem itself; the new folder
+        is pre-created with the bad permissions to stand in for whatever
+        the real downloader would have produced, and reparse_bangumi must
+        normalize it after the (mocked) move succeeds."""
+        bangumi = make_bangumi(
+            filter="", official_title="Wrong Title", year=None, tvdb_id=None
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        tmp_path.chmod(0o775)
+        old_season_dir = tmp_path / "Old Folder" / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_dir), "tags": ""}
+            ]
+        )
+        tmdb_result = ("Correct Title", 1, "2019", None, 359274, "tvdb")
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+            ):
+                # Stand in for the downloader having just created the
+                # destination with restrictive permissions, since the
+                # mocked move_torrent never touches the real filesystem.
+                # The bug was reported on the *show* folder itself, one
+                # level above the Season N directory reparse computes.
+                new_show_dir = tmp_path / "Correct Title (2019) [tvdb-359274]"
+                new_season_dir = new_show_dir / "Season 1"
+                new_season_dir.mkdir(parents=True)
+                new_show_dir.chmod(0o700)
+                new_season_dir.chmod(0o700)
+
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_moved == 1
+        assert stat.S_IMODE(new_show_dir.stat().st_mode) == 0o775
+        assert stat.S_IMODE(new_season_dir.stat().st_mode) == 0o775

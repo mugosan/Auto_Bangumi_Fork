@@ -38,7 +38,7 @@ class Downloader(BaseModel):
     path: str = Field(default="/downloads/Bangumi", description="Downloader path")
     ssl: bool = Field(default=False, description="Downloader ssl")
     max_folder_name_bytes: int = Field(
-        default=255,
+        default=220,
         description=(
             "Max UTF-8 bytes for a generated show/movie folder name, "
             "before the appended [tvdb-N]/[tmdb-N] tag. A long title "
@@ -48,11 +48,18 @@ class Downloader(BaseModel):
             "NAME_MAX <path>`) is detected automatically and takes "
             "precedence when lower than this -- e.g. a seedbox on "
             "encrypted home directories reports its own reduced limit "
-            "through that same mechanism. 255 (the standard ext4/POSIX "
-            "max) is just the ceiling used when detection isn't possible "
-            "(Windows, or a path that can't be queried yet); lower it only "
-            "if you want AutoBangumi to truncate more aggressively than "
-            "the filesystem strictly requires."
+            "through that same mechanism. The default (220, not the "
+            "standard ext4/POSIX max of 255) deliberately leaves headroom "
+            "below even the real OS limit: some Plex scanners used for "
+            "anime libraries (e.g. Absolute Series Scanner, often paired "
+            "with HAMA) derive their own per-show log filenames by "
+            "appending a suffix like '.scanner.log' to the exact show "
+            "folder name, so a folder sitting right at the OS's own limit "
+            "still breaks that scanner even though the folder itself was "
+            "created successfully. Raise it (up to 255, or whatever "
+            "`getconf NAME_MAX` reports) if you don't use a scanner like "
+            "that and want shorter truncation; lower it if you hit this "
+            "same problem with a different sidecar-file-producing tool."
         ),
     )
 

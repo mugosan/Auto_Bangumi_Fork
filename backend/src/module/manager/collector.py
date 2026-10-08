@@ -7,7 +7,7 @@ from pathlib import Path
 from module.conf import settings
 from module.database import Database
 from module.downloader import AddResult, DownloadClient
-from module.downloader.path import gen_save_path
+from module.downloader.path import gen_save_path, normalize_directory_permissions
 from module.models import Bangumi, ResponseModel
 from module.network import RequestContent
 from module.parser import TitleParser
@@ -193,6 +193,18 @@ async def reparse_bangumi(
         else:
             if current_path:
                 vacated_paths.add(current_path)
+
+    if torrents_moved:
+        # A torrent relocated via move_torrent has its destination
+        # directory created by the downloader, not this process -- and
+        # that's been observed to come out far more restrictive (0o700)
+        # than a normally-downloaded show's folder (0o775), which a
+        # library reader like Plex running as a different user can't even
+        # list. new_folder is the Season N directory; the bug is one
+        # level up, on the show folder itself -- normalize from there so
+        # it (and everything under it) gets fixed too. Best-effort; never
+        # fails the reparse.
+        normalize_directory_permissions(str(Path(new_folder).parent))
 
     download_root = Path(settings.downloader.path)
     folders_removed = 0
