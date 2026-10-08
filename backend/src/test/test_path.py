@@ -305,6 +305,28 @@ class TestGenSavePathLongTitleTruncation:
 
         assert result.endswith("[tvdb-473642]/Season 1")
 
+    def test_year_always_survives_truncation_intact(self):
+        """Regression: the first version of this fix truncated "title
+        (year)" as a single blob, so a title long enough that the budget
+        ran out before reaching the trailing "(year)" dropped the year
+        entirely -- exactly this title did, in production, on a mount
+        whose real limit is 255. Plex/HAMA identify a show by "Title
+        (Year)"; losing the year silently breaks matching. The year must
+        now be reserved the same way the id tag already is, so only the
+        free-form title ever gets shortened."""
+        bangumi = make_bangumi(
+            official_title=self.LONG_TITLE,
+            year="2026",
+            tvdb_id=473642,
+            id_source="tvdb",
+        )
+        with patch("module.downloader.path.settings") as mock_settings:
+            mock_settings.downloader.path = "/downloads/Bangumi"
+            mock_settings.downloader.max_folder_name_bytes = 255
+            result = gen_save_path(bangumi)
+
+        assert "(2026) [tvdb-473642]" in result
+
     def test_truncated_folder_still_round_trips_through_path_to_bangumi(self):
         """The id tag survives truncation well enough that path_to_bangumi
         (used to reverse-derive the show name for "advance" rename mode)

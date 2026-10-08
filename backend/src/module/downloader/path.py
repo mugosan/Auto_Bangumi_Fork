@@ -175,9 +175,8 @@ def _effective_max_folder_name_bytes() -> int:
 
 
 def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
-    title = data.official_title or "Unknown Bangumi"
-    base = f"{title} ({data.year})" if data.year else title
-    base = sanitize_path_fragment(base)
+    title = sanitize_path_fragment(data.official_title or "Unknown Bangumi")
+    year_suffix = f" ({data.year})" if data.year else ""
     # tvdb_id/id_source only exist on Bangumi/BangumiUpdate (movies don't
     # get a TVDB cross-reference); getattr keeps this shared with Movie.
     tvdb_id = getattr(data, "tvdb_id", None)
@@ -190,11 +189,18 @@ def _media_folder(data: Bangumi | BangumiUpdate | Movie | MovieUpdate) -> str:
     # per-component name limit (255 bytes on plain ext4, much less on an
     # encrypted-home seedbox). The downloader then can't create the folder
     # at all, so the task just sits at 0% with nowhere to put its files.
-    # The id tag is kept intact (short, and load-bearing for Plex/HAMA
-    # matching); only the title+year portion is truncated to make room.
-    budget = max(_effective_max_folder_name_bytes() - len(tag.encode("utf-8")), 1)
-    base = _truncate_to_byte_budget(base, budget)
-    folder = sanitize_path_fragment(base + tag)
+    # year_suffix and the id tag are both short, fixed, and load-bearing
+    # (Plex/HAMA identify a show by "Title (Year)" -- dropping the year
+    # breaks matching, and the tag drives Plex/HAMA + path_to_bangumi's
+    # reverse-parse) -- only the free-form title absorbs the truncation,
+    # and only it. Truncating "title (year)" as one blob (the original
+    # version of this fix) cut the year off entirely for a long enough
+    # title, since the budget ran out before reaching the parenthesis at
+    # the end.
+    reserved = len(year_suffix.encode("utf-8")) + len(tag.encode("utf-8"))
+    budget = max(_effective_max_folder_name_bytes() - reserved, 1)
+    title = _truncate_to_byte_budget(title, budget)
+    folder = sanitize_path_fragment(title + year_suffix + tag)
     if folder:
         return folder
     # 标题全由保留字符组成时清洗结果为空——不能让所有这类条目

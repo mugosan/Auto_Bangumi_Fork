@@ -1034,3 +1034,76 @@ class TestReparseBangumi:
         assert result.folders_removed == 0
         assert old_season_dir.exists()
         assert "not under the configured download root" in caplog.text
+
+    async def test_reparse_fixes_a_folder_that_was_missing_its_year(self, tmp_path):
+        """Regression: _media_folder() used to truncate "title (year)" as
+        one blob for a long enough title, dropping the year entirely (and
+        with it, Plex/HAMA's "Title (Year)" match) -- the exact title
+        below did this in production. Reparse re-derives the folder with
+        the fixed generator and must move the already-downloaded torrent
+        out of the old, year-less folder into the corrected one -- a user
+        should be able to fix an already-broken show with one click,
+        without re-downloading anything."""
+        long_title = (
+            "追放されたチート付与魔術師は気ままなセカンドライフを謳歌する。"
+            "～俺は武器だけじゃなく、あらゆるものに『強化ポイント』を付与できるし、"
+            "俺の意思でいつでも効果を解除できるけど、残った人たち大丈夫？～"
+        )
+        # The exact folder beta.13 produced: title truncated, year dropped,
+        # tag intact.
+        old_folder_name = (
+            "追放されたチート付与魔術師は気ままなセカンドライフを謳歌する。"
+            "～俺は武器だけじゃなく、あらゆるものに『強化ポイント』を付与できるし、"
+            "俺の意思でいつでも効果を解除 [tvdb-473642]"
+        )
+        bangumi = make_bangumi(
+            filter="",
+            official_title=long_title,
+            year="2026",
+            tvdb_id=473642,
+            id_source="tvdb",
+            season=1,
+        )
+        async with Database() as db:
+            await db.bangumi.add(bangumi)
+            bangumi_id = bangumi.id
+            await db.torrent.add(
+                Torrent(
+                    name="ep1.mkv",
+                    url="https://example.com/ep1.torrent",
+                    qb_hash="abc123",
+                    bangumi_id=bangumi_id,
+                )
+            )
+
+        old_season_dir = tmp_path / old_folder_name / "Season 1"
+        old_season_dir.mkdir(parents=True)
+
+        client = _client_with_all_torrents(
+            all_torrents=[
+                {"hash": "abc123", "save_path": str(old_season_dir), "tags": ""}
+            ]
+        )
+        # Same title/year/tvdb_id as already stored -- this is re-deriving
+        # the folder with fixed code, not correcting wrong metadata.
+        tmdb_result = (long_title, 1, "2026", None, 473642, "tvdb")
+
+        async with Database() as db:
+            with (
+                patch(
+                    "module.manager.collector.settings.downloader.path",
+                    str(tmp_path),
+                ),
+                patch(
+                    "module.manager.collector.TitleParser.tmdb_parser",
+                    AsyncMock(return_value=tmdb_result),
+                ),
+            ):
+                result = await reparse_bangumi(db, client, bangumi_id)
+
+        assert result is not None
+        assert result.torrents_moved == 1
+        assert "(2026)" in result.new_folder
+        client.move_torrent.assert_awaited_once_with("abc123", result.new_folder)
+        # The now-empty old (year-less) folder is cleaned up too.
+        assert not old_season_dir.exists()
