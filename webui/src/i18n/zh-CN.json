@@ -14,6 +14,8 @@
     "downloader_set": {
       "aria2_hint": "aria2 请在密码栏填入 RPC secret（用户名会被忽略）。地址示例：172.17.0.1:6800",
       "host": "下载器地址",
+      "max_folder_name_bytes": "文件夹名最大字节数",
+      "max_folder_name_bytes_hint": "过长的标题（尤其中日文，每字 3 字节）可能超出文件系统单层路径名限制，导致文件夹创建失败。系统会自动探测实际限制（同 getconf NAME_MAX），取较小值生效；此项仅在无法探测时兜底，或用于为第三方工具（如搭配 HAMA 使用的 Absolute Series Scanner，会在文件夹名后追加自己的日志文件名）预留余量。",
       "password": "密码",
       "path": "下载地址",
       "ssl": "SSL",

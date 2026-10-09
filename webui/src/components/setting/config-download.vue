@@ -61,6 +61,17 @@ const items: SettingItem<Downloader>[] = [
     label: () => t('config.downloader_set.ssl'),
     type: 'switch',
   },
+  {
+    configKey: 'max_folder_name_bytes',
+    label: () => t('config.downloader_set.max_folder_name_bytes'),
+    type: 'input',
+    css: 'w-72',
+    prop: {
+      type: 'number',
+      placeholder: '220',
+    },
+    description: t('config.downloader_set.max_folder_name_bytes_hint'),
+  },
 ];
 </script>
 

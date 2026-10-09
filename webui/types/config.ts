@@ -51,6 +51,7 @@ export interface Downloader {
   password: string;
   path: string;
   ssl: boolean;
+  max_folder_name_bytes: number;
 }
 export interface RssParser {
   enable: boolean;
@@ -192,6 +193,7 @@ export const initConfig: Config = {
     password: '',
     path: '',
     ssl: false,
+    max_folder_name_bytes: 220,
   },
   rss_parser: {
     enable: true,

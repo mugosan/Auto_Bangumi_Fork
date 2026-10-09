@@ -14,6 +14,8 @@
     "downloader_set": {
       "aria2_hint": "For aria2, enter the RPC secret in the password field (username is ignored). Host example: 172.17.0.1:6800",
       "host": "Host",
+      "max_folder_name_bytes": "Max Folder Name Bytes",
+      "max_folder_name_bytes_hint": "A long title (especially CJK, 3 bytes/char) can exceed a filesystem's per-component name limit and fail to create the folder. The real limit is detected automatically (same as `getconf NAME_MAX`) and the lower of the two is used; this is only a fallback when detection isn't possible, or to leave extra margin for a third-party tool (e.g. Absolute Series Scanner, often paired with HAMA) that appends its own suffix to the folder name.",
       "password": "Password",
       "path": "Download Path",
       "ssl": "SSL",
